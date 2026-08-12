@@ -50,8 +50,3 @@ video\cs2_video.txt              resolution and quality
 cloud-backup\cs2_user_convars_0_slot0.vcfg  what Steam Cloud normally brings
 cloud-backup\cs2_user_keys_0_slot0.vcfg  what Steam Cloud normally brings
 ```
-
-The crosshair is applied as convars. There is no share code to paste.
-
-`cloud-backup\` is a copy of what Steam Cloud normally delivers. You usually never need
-it: logging into Steam brings your sensitivity, crosshair and binds down by itself.
