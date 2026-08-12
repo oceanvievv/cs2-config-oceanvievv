@@ -710,7 +710,7 @@ $MachineCfg['cs2_machine_convars.vcfg'] = @'
 '@
 
 $PackName      = 'oceanvievv'
-$LaunchOptions = '+fps_max 0 -forcenovsync -nojoy -novid +engine_low_latency_sleep_after_client_tick true -language english -w 1440 -h 1080 -fullscreen'
+$LaunchOptions = '+fps_max 0 -forcenovsync -nojoy -novid +engine_low_latency_sleep_after_client_tick true -language english -w 1440 -h 1080 -fullscreen +exec autoexec'
 $ToolUrl       = 'https://github.com/oceanvievv/cs2-config'
 
 # No switch on the command line means somebody double-clicked the launcher, so ask. The

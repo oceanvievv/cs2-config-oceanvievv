@@ -32,7 +32,7 @@ Steam > CS2 > «Свойства» > «Общие».
 Переносимый вариант, безопасный на незнакомом железе:
 
 ```
-+fps_max 0 -forcenovsync -nojoy -novid +engine_low_latency_sleep_after_client_tick true -language english -w 1440 -h 1080 -fullscreen
++fps_max 0 -forcenovsync -nojoy -novid +engine_low_latency_sleep_after_client_tick true -language english -w 1440 -h 1080 -fullscreen +exec autoexec
 ```
 
 Твой полный вариант, домашний:
