@@ -23,7 +23,11 @@ set "CP="
 for /f "tokens=2 delims=:" %%c in ('chcp') do set "CP=%%c"
 chcp 65001 >nul
 
+rem  Delete first. Otherwise a copy left by an earlier run stands in for the extraction
+rem  when the extraction fails, and a corrupted download quietly runs the previous version
+rem  instead of saying it is corrupted.
 set "PS1=%TEMP%\cs2-config-setup.ps1"
+if exist "%PS1%" del "%PS1%"
 
 rem  The script writes the finished pack's path here; only it knows where that is.
 set "OUTF=%TEMP%\cs2-config-outdir.txt"
@@ -153,7 +157,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$TOOL_VERSION = '1.8.1'
+$TOOL_VERSION = '1.8.2'
 $TOOL_URL     = 'https://github.com/oceanvievv/cs2-config'
 
 # The Windows display language decides, and nothing else. Keyboard layouts are
