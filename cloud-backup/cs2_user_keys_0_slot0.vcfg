@@ -14,7 +14,7 @@
 		"KP_9"		"buy hegrenade"
 		"KP_MINUS"		"volume 0.01"
 		"KP_PLUS"		"volume 0.25"
-		"ALT"		"noclip"
+		"ALT"		"+voicerecord"
 		"F7"		"exec oceanvievv"
 		"F8"		"exec training"
 		"F9"		"exec knife"

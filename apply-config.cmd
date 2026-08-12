@@ -488,7 +488,7 @@ $CloudCfg['cs2_user_keys_0_slot0.vcfg'] = @'
 		"KP_9"		"buy hegrenade"
 		"KP_MINUS"		"volume 0.01"
 		"KP_PLUS"		"volume 0.25"
-		"ALT"		"noclip"
+		"ALT"		"+voicerecord"
 		"F7"		"exec oceanvievv"
 		"F8"		"exec training"
 		"F9"		"exec knife"
@@ -551,9 +551,166 @@ $CloudCfg['cs2_user_keys_0_slot0.vcfg'] = @'
 	}
 }
 '@
+$MachineCfg = [ordered]@{}
+$MachineCfg['cs2_machine_convars.vcfg'] = @'
+"config"
+{
+	"convars"
+	{
+		"cl_allow_animated_avatars"		"true"
+		"cl_autohelp"		"true"
+		"cl_color"		"1"
+		"cl_crosshair_friendly_warning"		"0"
+		"cl_deathcampanel_position_dynamic"		"1"
+		"cl_disable_round_end_report"		"false"
+		"cl_dm_buyrandomweapons"		"true"
+		"cl_enable_party_voice"		"true"
+		"cl_force_spec_hud_color_to_team$1"		"true"
+		"cl_hide_avatar_images"		"0"
+		"cl_hud_color"		"0"
+		"cl_hud_radar_background_alpha"		"0.627"
+		"cl_hud_radar_blur_background"		"true"
+		"cl_hud_radar_map_additive"		"true"
+		"cl_hud_radar_scale"		"0.903726"
+		"cl_hud_telemetry_frametime_poor"		"100"
+		"cl_hud_telemetry_frametime_show"		"1"
+		"cl_hud_telemetry_net_detailed"		"0"
+		"cl_hud_telemetry_net_misdelivery_poor"		"5"
+		"cl_hud_telemetry_net_misdelivery_show"		"1"
+		"cl_hud_telemetry_net_quality_graph_show"		"0"
+		"cl_hud_telemetry_ping_poor"		"100"
+		"cl_hud_telemetry_ping_show"		"1"
+		"cl_hud_telemetry_serverrecvmargin_graph_show"		"0"
+		"cl_mute_all_but_friends_and_party"		"0"
+		"cl_mute_enemy_team"		"false"
+		"cl_net_buffer_ticks"		"0"
+		"cl_observed_bot_crosshair"		"2"
+		"cl_ping_fade_deadzone"		"60"
+		"cl_ping_fade_distance"		"300"
+		"cl_player_ping_mute"		"0"
+		"cl_predict_body_shot_fx"		"false"
+		"cl_predict_head_shot_fx"		"false"
+		"cl_predict_kill_ragdolls"		"false"
+		"cl_quickinventory_filename"		"radial_quickinventory.txt"
+		"cl_quickinventory_lastinv"		"true"
+		"cl_quickinventory_line_update_speed"		"65"
+		"cl_radar_always_centered"		"true"
+		"cl_radar_icon_scale_min"		"0.6"
+		"cl_radar_rotate"		"false"
+		"cl_radar_scale"		"0.960615"
+		"cl_radar_scale_alternate$2"		"0.963307"
+		"cl_radar_scale_dynamic"		"false"
+		"cl_radar_show_all_players_when_spectating"		"true"
+		"cl_radar_square_always"		"true"
+		"cl_radar_square_when_spectating"		"true"
+		"cl_radar_square_with_scoreboard"		"false"
+		"cl_radial_radio_tab_0_text_1"		"#Chatwheel_requestspend"
+		"cl_radial_radio_tab_0_text_2"		"#Chatwheel_requestweapon"
+		"cl_radial_radio_tab_0_text_3"		"#Chatwheel_bplan"
+		"cl_radial_radio_tab_0_text_4"		"#Chatwheel_followingyou"
+		"cl_radial_radio_tab_0_text_5"		"#Chatwheel_midplan"
+		"cl_radial_radio_tab_0_text_6"		"#Chatwheel_followme"
+		"cl_radial_radio_tab_0_text_7"		"#Chatwheel_aplan"
+		"cl_radial_radio_tab_0_text_8"		"#Chatwheel_requestecoround"
+		"cl_radial_radio_tab_1_text_1"		"#Chatwheel_enemyspotted"
+		"cl_radial_radio_tab_1_text_2"		"#Chatwheel_needbackup"
+		"cl_radial_radio_tab_1_text_3"		"#Chatwheel_bplan"
+		"cl_radial_radio_tab_1_text_4"		"#Chatwheel_bombcarrierspotted"
+		"cl_radial_radio_tab_1_text_5"		"#Chatwheel_multipleenemieshere"
+		"cl_radial_radio_tab_1_text_6"		"#Chatwheel_sniperspotted"
+		"cl_radial_radio_tab_1_text_7"		"#Chatwheel_aplan"
+		"cl_radial_radio_tab_1_text_8"		"#Chatwheel_inposition"
+		"cl_radial_radio_tab_2_text_1"		"#Chatwheel_affirmative"
+		"cl_radial_radio_tab_2_text_2"		"#Chatwheel_negative"
+		"cl_radial_radio_tab_2_text_3"		"#Chatwheel_compliment"
+		"cl_radial_radio_tab_2_text_4"		"#Chatwheel_thanks"
+		"cl_radial_radio_tab_2_text_5"		"#Chatwheel_cheer"
+		"cl_radial_radio_tab_2_text_6"		"#Chatwheel_peptalk"
+		"cl_radial_radio_tab_2_text_7"		"#Chatwheel_sorry"
+		"cl_radial_radio_tab_2_text_8"		"#Chatwheel_sectorclear"
+		"cl_radial_radio_tap_to_ping"		"true"
+		"cl_radial_radio_version_reset"		"12"
+		"cl_sanitize_player_names"		"false"
+		"cl_scoreboard_mouse_enable_binding"		"+attack2"
+		"cl_scoreboard_survivors_always_on"		"false"
+		"cl_show_clan_in_death_notice"		"true"
+		"cl_show_observer_crosshair"		"2"
+		"cl_sniper_delay_unscope"		"false"
+		"cl_sniper_show_inaccuracy"		"true"
+		"cl_teamid_overhead_colors_show$2"		"true"
+		"cl_teamid_overhead_fade_near_crosshair"		"0.5"
+		"cl_teamid_overhead_mode$2"		"3"
+		"cl_teammate_colors_show"		"1"
+		"cl_timeout"		"30"
+		"cl_use_last_selected_weapon_slot_position"		"false"
+		"cl_versus_intro"		"true"
+		"cl_weapon_selection_rarity_color"		"false"
+		"closecaption"		"false"
+		"csgo_map_preview_scale"		"4.8439817"
+		"dsp_volume"		"0.8"
+		"fov_desired"		"75"
+		"fps_max"		"0"
+		"fps_max_ui$2"		"200"
+		"hud_fastswitch"		"0"
+		"hud_scaling$3"		"1"
+		"mapoverview_icon_scale"		"1"
+		"mouse_inverty"		"false"
+		"r_drawtracers_firstperson"		"true"
+		"r_fullscreen_gamma"		"2.2"
+		"r_icon_image_cache_to_disk"		"true"
+		"r_player_visibility_mode"		"1"
+		"r_show_build_info"		"true"
+		"r_spectator_flashbang_opacity"		"0.6"
+		"rate"		"786432"
+		"safezonex"		"1"
+		"safezoney"		"1"
+		"snd_autodetect_latency"		"true"
+		"snd_deathcamera_volume$4"		"0.16"
+		"snd_duckerattacktime"		"0.5"
+		"snd_duckerreleasetime"		"2.5"
+		"snd_duckerthreshold"		"0.15"
+		"snd_ducktovolume"		"0.55"
+		"snd_gain"		"1"
+		"snd_gamevoicevolume"		"1"
+		"snd_gamevolume"		"1"
+		"snd_headphone_eq"		"0"
+		"snd_mapobjective_volume$4"		"0.04"
+		"snd_menumap_volume$4"		"1"
+		"snd_menumusic_volume$4"		"0.04"
+		"snd_mixahead"		"0.001"
+		"snd_musicvolume$2"		"1"
+		"snd_mute_losefocus"		"true"
+		"snd_mute_mvp_music_live_players"		"false"
+		"snd_mvp_volume$4"		"0.16"
+		"snd_roundaction_volume$4"		"0"
+		"snd_roundend_volume$4"		"0.16"
+		"snd_roundstart_volume$4"		"0"
+		"snd_spatialize_lerp"		"0"
+		"snd_steamaudio_enable_perspective_correction"		"true"
+		"snd_steamaudio_source_pathing_debug"		"false"
+		"snd_surf_volume_inair"		"0.5"
+		"snd_surf_volume_map"		"0.3"
+		"snd_surf_volume_slide"		"0.5"
+		"snd_tensecondwarning_volume$4"		"0.04"
+		"snd_toolvolume"		"1"
+		"snd_voipvolume"		"1"
+		"speaker_config"		"-1"
+		"spec_centerchasecam"		"false"
+		"spec_replay_autostart"		"true"
+		"spec_show_xray"		"1"
+		"spec_usenumberkeys_nobinds"		"true"
+		"sv_voiceenable"		"true"
+		"viewmodel_presetpos"		"3"
+		"voice_always_sample_mic$2"		"false"
+		"voice_modenable"		"true"
+		"voice_threshold$2"		"-120"
+		"volume"		"0.25"
+	}
+}
+'@
 
 $PackName      = 'oceanvievv'
-$LaunchOptions = '+fps_max 0 -forcenovsync -nojoy -novid +engine_low_latency_sleep_after_client_tick true -language english'
+$LaunchOptions = '+fps_max 0 -forcenovsync -nojoy -novid +engine_low_latency_sleep_after_client_tick true -language english -w 1440 -h 1080 -fullscreen'
 $ToolUrl       = 'https://github.com/oceanvievv/cs2-config'
 
 # No switch on the command line means somebody double-clicked the launcher, so ask. The
@@ -574,7 +731,9 @@ if (-not ($Video -or $Convars -or $Check -or $Undo)) {
     Write-Host ''
     $pick = Read-Host (L '  Choose 1-4, or just press Enter for 1' `
                          '  Выбери 1-4 или просто нажми Enter для 1')
-    switch ($pick.Trim()) {
+    # "$pick", not $pick: with no console to read from, Read-Host hands back null, and
+    # calling .Trim() on that would end the run with a stack trace instead of a default.
+    switch ("$pick".Trim()) {
         '2'     { }
         '3'     { $Check = $true }
         '4'     { $Undo  = $true }
@@ -604,7 +763,7 @@ if ($Undo) {
     Write-Host ''
     Write-Host (L "Restoring the files this PC had before, from $($last.Name)" `
                   "Возвращаю файлы, которые были на этом ПК, из копии $($last.Name)")
-    $map = @{ 'cfg' = $cfgDir; 'video' = $userCfg; 'cloud' = $userCfg }
+    $map = @{ 'cfg' = $cfgDir; 'video' = $userCfg; 'cloud' = $userCfg; 'machine' = $userCfg }
     foreach ($tag in $map.Keys) {
         $dir = Join-Path $last.FullName $tag
         if (-not (Test-Path $dir) -or -not $map[$tag]) { continue }
@@ -634,8 +793,9 @@ if ($Check) {
                   'Сравниваю набор с тем, что на ПК (ничего не записывается):')
     Compare-Payload $GameCfg  $cfgDir  'cfg'
     if ($userCfg) {
-        Compare-Payload $VideoCfg $userCfg 'video'
-        Compare-Payload $CloudCfg $userCfg 'cloud'
+        Compare-Payload $VideoCfg   $userCfg 'video'
+        Compare-Payload $MachineCfg $userCfg 'machine'
+        Compare-Payload $CloudCfg   $userCfg 'cloud'
     }
     Write-Host ''
     Info 'Run without -Check to apply.' 'Запусти без -Check, чтобы применить.'
@@ -649,6 +809,19 @@ Write-Payload $GameCfg $cfgDir 'cfg'
 Ok 'Configs in place. Crosshair included, no share code needed.' `
    'Конфиги на месте. Прицел внутри, код обмена не нужен.'
 
+# Radar, fov, volumes, HUD scale. Steam Cloud does not carry these, so on any PC but the
+# one they came from they are that machine's defaults unless this writes them. Applied
+# with the configs rather than behind -Convars: nothing here belongs to Steam, so nothing
+# overwrites it on the way out - only CS2 itself does, which is why it has to be closed.
+if ($userCfg -and $MachineCfg.Count -gt 0) {
+    Write-Host ''
+    Write-Host (L 'Writing the settings Steam Cloud does not carry:' `
+                  'Пишу настройки, которые не возит Steam Cloud:')
+    Write-Payload $MachineCfg $userCfg 'machine'
+    Warn 'CS2 must be closed for these: it rewrites this file when it exits.' `
+         'Для них CS2 должна быть закрыта: при выходе она перезаписывает этот файл.'
+}
+
 if ($Video) {
     if (-not $userCfg) { Warn 'No CS2 userdata folder. Log into Steam, run CS2 once, retry.' `
                               'Нет папки userdata для CS2. Войди в Steam, запусти игру один раз и повтори.' }
@@ -658,8 +831,8 @@ if ($Video) {
         Write-Host ''
         Write-Host (L 'Writing video settings:' 'Пишу настройки видео:')
         Write-Payload $VideoCfg $userCfg 'video'
-        Warn 'Check the resolution in game: CS2 may re-detect the GPU and override some of it.' `
-             'Проверь разрешение в игре: CS2 может заново определить видеокарту и часть настроек переписать.'
+        Warn 'On a different GPU, CS2 re-detects and overrides some of this. The resolution is in the launch options for that reason.' `
+             'На другой видеокарте CS2 определит её заново и часть этого перепишет. Поэтому разрешение продублировано в параметрах запуска.'
     }
 } else {
     Info ''

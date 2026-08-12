@@ -32,7 +32,7 @@ Steam > CS2 > Properties > General.
 Portable version, safe on unknown hardware:
 
 ```
-+fps_max 0 -forcenovsync -nojoy -novid +engine_low_latency_sleep_after_client_tick true -language english
++fps_max 0 -forcenovsync -nojoy -novid +engine_low_latency_sleep_after_client_tick true -language english -w 1440 -h 1080 -fullscreen
 ```
 
 Your full version, for home:
@@ -54,6 +54,7 @@ cfg\knife.cfg
 cfg\oceanvievv.cfg               Your main config
 cfg\training.cfg
 video\cs2_video.txt              Resolution and quality
+machine\cs2_machine_convars.vcfg  Radar, fov, volumes: what Steam Cloud does not carry
 cloud-backup\cs2_user_convars_0_slot0.vcfg  What Steam Cloud normally brings
 cloud-backup\cs2_user_keys_0_slot0.vcfg  What Steam Cloud normally brings
 ```
