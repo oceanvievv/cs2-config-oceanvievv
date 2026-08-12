@@ -4,13 +4,6 @@ Packed by [cs2-config](https://github.com/oceanvievv/cs2-config).
 
 ## Installing the config on another PC
 
-#### One command using PowerShell
-Run PowerShell and paste the following command there:
-
-```powershell
-iwr -useb https://raw.githubusercontent.com/<you>/<repo>/main/apply-config.cmd -OutFile "$env:TEMP\cs2.cmd"; & "$env:TEMP\cs2.cmd" -Video
-```
-
 #### Installation file
 Download the [apply-config.cmd](the link) and launch it.
 
