@@ -258,7 +258,7 @@ subclass_create 508
 echo Knife dropped
 '@
 $GameCfg['oceanvievv.cfg'] = @'
-bind "mwheelup" "+jump"
+bind "mwheelup" "switchhands"
 bind "mwheeldown" "+jump"
 
 bind "scancode86" "volume 0.01"
