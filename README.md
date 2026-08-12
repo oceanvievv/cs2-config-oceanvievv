@@ -1,6 +1,6 @@
 # CS2 config
 
-CS2 Конфиг oceanvievv packed by [cs2-config](https://github.com/oceanvievv/cs2-config).
+Packed by [cs2-config](https://github.com/oceanvievv/cs2-config).
 
 ## Installing the config on another PC
 
