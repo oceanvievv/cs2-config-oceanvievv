@@ -22,9 +22,9 @@ set "SELF=%~f0"
 powershell -NoProfile -Command "$m='::'+'CFG::'; $t=[IO.File]::ReadAllText($env:SELF,[Text.Encoding]::UTF8); $i=$t.LastIndexOf($m); if($i -lt 0){exit 1}; [IO.File]::WriteAllText($env:TEMP+'\apply-config.ps1', $t.Substring($i+$m.Length), (New-Object Text.UTF8Encoding($true)))"
 if not exist "%PS1%" goto broken
 
-rem  Switches go straight through, so the one-line install can pass -Video. With none the
-rem  script shows its own menu: that lives on the PowerShell side, which already knows the
-rem  display language, while cmd would need a second way to work it out.
+rem  Switches go straight through. With none the script shows its own menu: that lives on
+rem  the PowerShell side, which already knows the display language, while cmd would need a
+rem  second way to work it out.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" %*
 
 rem  Leave nothing behind on a machine you borrowed.
