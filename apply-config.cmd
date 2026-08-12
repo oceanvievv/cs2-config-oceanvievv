@@ -283,6 +283,10 @@ bind "scancode66" "exec knife"
 volume "0.1"
 bind "scancode226" "+voicerecord"
 
+bind "z" "radio1"
+bind "x" "radio2"
+bind "c" "radio3"
+
 sensitivity "2.2"
 zoom_sensitivity_ratio "1.0"
 
