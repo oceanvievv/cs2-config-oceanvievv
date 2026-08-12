@@ -8,7 +8,7 @@
 шаги.
 
 #### Файл установки
-Скачай [apply-config.cmd](https://github.com/oceanvievv/cs2-config-oceanvievv/blob/main/apply-config.cmd) и запусти его.
+Скачай [apply-config.cmd](https://github.com/<you>/<repo>/blob/main/apply-config.cmd) и запусти его.
 
 #### Скопировать конфиги вручную
 Скопируй файлы из `cfg\` в папку:
@@ -32,7 +32,7 @@ Steam > CS2 > «Свойства» > «Общие».
 Переносимый вариант, безопасный на незнакомом железе:
 
 ```
-+fps_max 0 -forcenovsync -nojoy -novid +engine_low_latency_sleep_after_client_tick true -language english -w 1440 -h 1080 -fullscreen +exec autoexec
++fps_max 0 -forcenovsync -nojoy -novid +engine_low_latency_sleep_after_client_tick true -language english
 ```
 
 Твой полный вариант, домашний:
@@ -54,7 +54,6 @@ cfg\knife.cfg
 cfg\oceanvievv.cfg               Твой главный конфиг
 cfg\training.cfg
 video\cs2_video.txt              Разрешение и качество картинки
-machine\cs2_machine_convars.vcfg  Радар, fov, громкости: то, что не возит Steam Cloud
 cloud-backup\cs2_user_convars_0_slot0.vcfg  То, что обычно приносит Steam Cloud
 cloud-backup\cs2_user_keys_0_slot0.vcfg  То, что обычно приносит Steam Cloud
 ```
