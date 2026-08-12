@@ -1,60 +1,30 @@
 # CS2 config
 
-oceanvievv — CS2 config packed by [cs2-config](https://github.com/oceanvievv/cs2-config).
+CS2 Конфиг oceanvievv packed by [cs2-config](https://github.com/oceanvievv/cs2-config).
 
 ## Installing the config on another PC
 
-Use the first option that works there.
-
-### 1. Double-click `apply-config.cmd`
-
-Needs PowerShell. The easy one: you already have this folder, off a USB stick or a
-download. It asks what to do — apply everything, apply configs only, check what differs,
-or undo.
-
-### 2. One command
-
-Needs PowerShell and internet. For a PC that has nothing on it yet:
+#### One command using PowerShell
+Run PowerShell and paste the following command there:
 
 ```powershell
 iwr -useb https://raw.githubusercontent.com/<you>/<repo>/main/apply-config.cmd -OutFile "$env:TEMP\cs2.cmd"; & "$env:TEMP\cs2.cmd" -Video
 ```
 
-### 3. PowerShell blocked
+#### Installation file
+Download the [apply-config.cmd](the link) and launch it.
 
-Needs only Explorer. Copy the files from `cfg\` into:
+#### Copy configs manually
+Copy the files from `cfg\` into:
 
 ```
 ...\steamapps\common\Counter-Strike Global Offensive\game\csgo\cfg\
 ```
 
-That is all the installer does.
+#### Use CS2 console
+Open `apply-config-using-console.txt` and copy everything, then paste into the CS2 console.
 
-### 4. No file access at all
-
-Needs only the game. `apply-config-using-console.txt` is one line of console commands and
-nothing else: open it, select all, copy, paste into the CS2 console, Enter. Once.
-
-Turn the console on first: Settings > Game > Enable Developer Console = Yes. It opens with
-the ~ key.
-
-Not an equal substitute: configs and crosshair only. No video settings, no
-`cloud-backup`, nothing written to disk, no undo. Configs you run from a key are left out
-of the line as well — pasting one would change the server you are on rather than your
-settings. Crosshair, sensitivity and binds do survive a restart, because CS2 saves those
-convars on exit. Server settings like `sv_cheats` do not.
-
-## apply-config switches
-
-`apply-config.cmd` offers these as a menu. Pass one on the command line and the menu is
-skipped.
-
-| switch | what it does |
-|---|---|
-| `-Video` | also apply resolution and quality |
-| `-Convars` | restore sensitivity and binds from `cloud-backup\`. Only if Steam Cloud failed. Close CS2 and Steam first |
-| `-Check` | show what differs, write nothing |
-| `-Undo` | put the PC back the way you found it |
+Configs and crosshair only.
 
 ## Launch options
 
@@ -99,33 +69,3 @@ The crosshair is applied as convars. There is no share code to paste.
 
 `cloud-backup\` is a copy of what Steam Cloud normally delivers. You usually never need
 it: logging into Steam brings your sensitivity, crosshair and binds down by itself.
-
-## The config in the cloud
-
-Git is not needed. This is all done in a browser.
-
-**Putting the config in the cloud**
-
-1. Sign in at github.com
-2. Create a public repository (`cs2-config`, for example)
-3. On the page that opens, click **uploading an existing file**
-4. Drag the contents of this folder onto the page
-5. Click **Commit changes**
-
-**Updating the config in the cloud**
-
-1. Open the repository holding your config
-2. Click `Add file` and pick `Upload files`
-3. Drag the contents of this folder onto the page
-4. Click **Commit changes**
-
-Then fix up the one-line install at the top of this file: replace <you> and <repo> with
-your GitHub name and the repo you just created.
-
-## Updating the config
-
-Changed your settings in the game? Run `update-config.cmd`. Before you travel, not after.
-
----
-
-Built with cs2-config 1.6.2 — https://github.com/oceanvievv/cs2-config
