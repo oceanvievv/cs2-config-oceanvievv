@@ -8,7 +8,7 @@
 шаги.
 
 #### Файл установки
-Скачай [apply-config.cmd](https://github.com/<you>/<repo>/blob/main/apply-config.cmd) и запусти его.
+Скачай [apply-config.cmd](https://github.com/oceanvievv/cs2-config-oceanvievv/blob/main/apply-config.cmd) и запусти его.
 
 #### Скопировать конфиги вручную
 Скопируй файлы из `cfg\` в папку:

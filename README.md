@@ -8,7 +8,7 @@ Any one of these three. Take the first that works on that PC — they are altern
 steps.
 
 #### Installation file
-Download [apply-config.cmd](https://github.com/<you>/<repo>/blob/main/apply-config.cmd) and launch it.
+Download [apply-config.cmd](https://github.com/oceanvievv/cs2-config-oceanvievv/blob/main/apply-config.cmd) and launch it.
 
 #### Copy configs manually
 Copy the files from `cfg\` into:
