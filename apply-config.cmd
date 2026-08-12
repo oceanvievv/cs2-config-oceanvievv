@@ -7,6 +7,13 @@ rem  the marker is plain text, and cmd stops reading at the exit above it.
 setlocal
 title CS2 config
 
+rem  Cyrillic needs a console codepage that can render it; a stock Russian console is 866.
+rem  Switch to UTF-8 and put the old one back on the way out, so running this from an
+rem  existing terminal leaves no trace.
+set "CP="
+for /f "tokens=2 delims=:" %%c in ('chcp') do set "CP=%%c"
+chcp 65001 >nul
+
 set "PS1=%TEMP%\apply-config.ps1"
 if exist "%PS1%" del "%PS1%"
 
@@ -15,38 +22,21 @@ set "SELF=%~f0"
 powershell -NoProfile -Command "$m='::'+'CFG::'; $t=[IO.File]::ReadAllText($env:SELF,[Text.Encoding]::UTF8); $i=$t.LastIndexOf($m); if($i -lt 0){exit 1}; [IO.File]::WriteAllText($env:TEMP+'\apply-config.ps1', $t.Substring($i+$m.Length), (New-Object Text.UTF8Encoding($true)))"
 if not exist "%PS1%" goto broken
 
-rem  A switch skips the menu, so the one-line install can pass -Video straight through.
-if not "%~1"=="" (
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" %*
-    goto done
-)
+rem  Switches go straight through, so the one-line install can pass -Video. With none the
+rem  script shows its own menu: that lives on the PowerShell side, which already knows the
+rem  display language, while cmd would need a second way to work it out.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" %*
 
-echo.
-echo   CS2 CONFIG
-echo.
-echo     [1]  Apply everything     configs, crosshair, resolution and quality
-echo     [2]  Apply configs only   leaves this PC's video settings alone
-echo     [3]  Check                show what differs, change nothing
-echo     [4]  Undo                 put this PC back the way you found it
-echo.
-
-set "ARGS=-Video"
-set /p "PICK=  Choose 1-4, or just press Enter for 1: "
-if "%PICK%"=="2" set "ARGS="
-if "%PICK%"=="3" set "ARGS=-Check"
-if "%PICK%"=="4" set "ARGS=-Undo"
-
-echo.
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" %ARGS%
-
-:done
 rem  Leave nothing behind on a machine you borrowed.
 if exist "%PS1%" del "%PS1%"
 echo.
 pause
+call :restorecp
 exit /b 0
 
 :broken
+rem  Both languages at once, no detection. This runs when the file itself is damaged,
+rem  which is the worst possible place for one more thing that can go wrong.
 echo.
 echo Could not unpack the script from this file.
 echo Re-download it: some editors and chat apps corrupt .cmd files.
@@ -54,8 +44,19 @@ echo.
 echo If PowerShell is blocked here, copy cfg\*.cfg into the game folder by hand,
 echo or paste apply-config-using-console.txt into the CS2 console instead.
 echo.
+echo Не удалось распаковать скрипт из этого файла.
+echo Скачай его заново: некоторые редакторы и мессенджеры портят .cmd.
+echo.
+echo Если тут закрыт PowerShell, скопируй cfg\*.cfg в папку игры вручную
+echo или вставь содержимое apply-config-using-console.txt в консоль CS2.
+echo.
 pause
+call :restorecp
 exit /b 1
+
+:restorecp
+if defined CP chcp %CP% >nul
+goto :eof
 
 ::CFG::<#
     CS2 settings pack. SELF-CONTAINED - every config is embedded below, so this one
@@ -83,10 +84,25 @@ $ErrorActionPreference = 'Stop'
 $BackupRoot = Join-Path $env:TEMP 'cs2-config-apply-backup'
 $Backup     = Join-Path $BackupRoot (Get-Date -Format 'yyyyMMdd-HHmmss')
 
-function Info($m) { Write-Host "     $m" }
-function Ok  ($m) { Write-Host "OK   $m" -ForegroundColor Green }
-function Warn($m) { Write-Host "WARN $m" -ForegroundColor Yellow }
-function Die ($m) { Write-Host "FAIL $m" -ForegroundColor Red; exit 1 }
+# The Windows display language decides, and nothing else. Keyboard layouts are not
+# consulted. Every message carries both languages at the call site; passing only English
+# means "same in both", which is what you want for paths and file names.
+$Lang = 'en'
+try {
+    if ((Get-UICulture).TwoLetterISOLanguageName -eq 'ru') { $Lang = 'ru' }
+} catch { }
+
+function L($en, $ru) {
+    if ($Lang -eq 'ru' -and $ru) { return $ru }
+    return $en
+}
+function Info($en, $ru) { Write-Host "     $(L $en $ru)" }
+function Ok  ($en, $ru) { Write-Host "OK   $(L $en $ru)" -ForegroundColor Green }
+function Warn($en, $ru) { Write-Host "WARN $(L $en $ru)" -ForegroundColor Yellow }
+function Die ($en, $ru) { Write-Host "FAIL $(L $en $ru)" -ForegroundColor Red; exit 1 }
+
+# Status words sit in a fixed column, and the Russian ones are longer. Pad, do not count.
+function Mark($en, $ru) { return (L $en $ru).PadRight(11) }
 
 # Windows does not care how a path is spelled, but whoever reads the output does. Steam
 # writes SteamPath into the registry all lower case and with forward slashes, like
@@ -164,11 +180,11 @@ function Compare-Payload($map, $destDir, $label) {
     if (-not $destDir) { return }
     foreach ($name in $map.Keys) {
         $dest = Join-Path $destDir $name
-        if (-not (Test-Path $dest)) { Write-Host "     MISSING    $label/$name" -ForegroundColor Yellow }
+        if (-not (Test-Path $dest)) { Write-Host "     $(Mark 'MISSING' 'НЕТ ВОВСЕ')$label/$name" -ForegroundColor Yellow }
         elseif ((Normalize ([IO.File]::ReadAllText($dest))) -eq (Normalize $map[$name])) {
-            Info "same       $label/$name"
+            Info "$(Mark 'same' 'совпадает')$label/$name"
         }
-        else { Write-Host "     DIFFERENT  $label/$name" -ForegroundColor Yellow }
+        else { Write-Host "     $(Mark 'DIFFERENT' 'ОТЛИЧАЕТСЯ')$label/$name" -ForegroundColor Yellow }
     }
 }
 
@@ -207,8 +223,6 @@ host_writeconfig
 // ---- added by cs2-config ----
 exec crosshair
 host_writeconfig
-
-// ---- added by cs2-config ----
 '@
 $GameCfg['crosshair.cfg'] = @'
 // Crosshair, read from your CS2 settings by cs2-config.
@@ -542,23 +556,54 @@ $PackName      = 'oceanvievv'
 $LaunchOptions = '+fps_max 0 -forcenovsync -nojoy -novid +engine_low_latency_sleep_after_client_tick true -language english'
 $ToolUrl       = 'https://github.com/oceanvievv/cs2-config'
 
+# No switch on the command line means somebody double-clicked the launcher, so ask. The
+# menu lives here and not in the .cmd above it: this half already knows the display
+# language, and cmd would need its own detection to say the same thing in Russian.
+if (-not ($Video -or $Convars -or $Check -or $Undo)) {
+    Write-Host ''
+    Write-Host (L '  CS2 CONFIG' '  КОНФИГ CS2') -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host (L '    [1]  Apply everything     configs, crosshair, resolution and quality' `
+                  '    [1]  Применить всё        конфиги, прицел, разрешение и качество')
+    Write-Host (L '    [2]  Apply configs only   the video settings of this PC stay as they are' `
+                  '    [2]  Только конфиги       настройки видео этого ПК останутся как есть')
+    Write-Host (L '    [3]  Check                show what differs, change nothing' `
+                  '    [3]  Проверить            показать различия, ничего не менять')
+    Write-Host (L '    [4]  Undo                 put this PC back the way you found it' `
+                  '    [4]  Откатить             вернуть ПК в то состояние, в котором застал')
+    Write-Host ''
+    $pick = Read-Host (L '  Choose 1-4, or just press Enter for 1' `
+                         '  Выбери 1-4 или просто нажми Enter для 1')
+    switch ($pick.Trim()) {
+        '2'     { }
+        '3'     { $Check = $true }
+        '4'     { $Undo  = $true }
+        default { $Video = $true }
+    }
+}
+
 Write-Host ''
-Write-Host "=== CS2 settings: $PackName ================================" -ForegroundColor Cyan
+Write-Host (('=== ' + (L 'CS2 settings' 'Конфиг CS2') + ": $PackName ").PadRight(60, '=')) -ForegroundColor Cyan
 
 $steam = Get-SteamPath
-if (-not $steam) { Die 'Steam not found in the registry. Is Steam installed?' }
+if (-not $steam) { Die 'Steam not found in the registry. Is Steam installed?' `
+                       'Steam не найден в реестре. Он вообще установлен?' }
 $cfgDir = Get-CS2CfgPath $steam
-if (-not $cfgDir) { Die 'CS2 not found in any Steam library. Install CS2 first.' }
+if (-not $cfgDir) { Die 'CS2 not found in any Steam library. Install CS2 first.' `
+                        'CS2 не найдена ни в одной библиотеке Steam. Сначала установи игру.' }
 $userCfg = Get-UserCfgPath $steam
-Ok "CS2 cfg folder   $cfgDir"
+Ok ((L 'CS2 cfg folder' 'Папка cfg').PadRight(17) + $cfgDir)
 
 # --- undo -------------------------------------------------------------------------
 if ($Undo) {
-    if (-not (Test-Path $BackupRoot)) { Die 'No backup found on this PC. Nothing to undo.' }
+    if (-not (Test-Path $BackupRoot)) { Die 'No backup found on this PC. Nothing to undo.' `
+                                            'На этом ПК нет резервной копии. Откатывать нечего.' }
     $last = Get-ChildItem $BackupRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1
-    if (-not $last) { Die 'No backup found on this PC. Nothing to undo.' }
+    if (-not $last) { Die 'No backup found on this PC. Nothing to undo.' `
+                          'На этом ПК нет резервной копии. Откатывать нечего.' }
     Write-Host ''
-    Write-Host "Restoring the files this PC had before: $($last.Name)"
+    Write-Host (L "Restoring the files this PC had before, from $($last.Name)" `
+                  "Возвращаю файлы, которые были на этом ПК, из копии $($last.Name)")
     $map = @{ 'cfg' = $cfgDir; 'video' = $userCfg; 'cloud' = $userCfg }
     foreach ($tag in $map.Keys) {
         $dir = Join-Path $last.FullName $tag
@@ -566,86 +611,104 @@ if ($Undo) {
         foreach ($f in Get-ChildItem $dir -File) {
             if ($f.Name -eq '_added.txt') { continue }
             Copy-Item $f.FullName (Join-Path $map[$tag] $f.Name) -Force
-            Info "restored  $tag/$($f.Name)"
+            Info "$(Mark 'restored' 'возвращён')$tag/$($f.Name)"
         }
         $addedList = Join-Path $dir '_added.txt'
         if (Test-Path $addedList) {
             foreach ($n in (Get-Content $addedList)) {
                 if ($n.Trim() -eq '') { continue }
                 $victim = Join-Path $map[$tag] $n
-                if (Test-Path $victim) { Remove-Item $victim -Force; Info "removed   $tag/$n" }
+                if (Test-Path $victim) { Remove-Item $victim -Force; Info "$(Mark 'removed' 'удалён')$tag/$n" }
             }
         }
     }
-    Ok 'Undo complete. This PC is back to how you found it.'
+    Ok 'Undo complete. This PC is back to how you found it.' `
+       'Откат выполнен. ПК в том состоянии, в котором ты его застал.'
     exit 0
 }
 
 # --- check ------------------------------------------------------------------------
 if ($Check) {
     Write-Host ''
-    Write-Host 'Comparing this pack against the PC (nothing will be written):'
+    Write-Host (L 'Comparing this pack against the PC (nothing will be written):' `
+                  'Сравниваю набор с тем, что на ПК (ничего не записывается):')
     Compare-Payload $GameCfg  $cfgDir  'cfg'
     if ($userCfg) {
         Compare-Payload $VideoCfg $userCfg 'video'
         Compare-Payload $CloudCfg $userCfg 'cloud'
     }
     Write-Host ''
-    Info 'Run without -Check to apply.'
+    Info 'Run without -Check to apply.' 'Запусти без -Check, чтобы применить.'
     exit 0
 }
 
 # --- apply ------------------------------------------------------------------------
 Write-Host ''
-Write-Host 'Writing configs:'
+Write-Host (L 'Writing configs:' 'Пишу конфиги:')
 Write-Payload $GameCfg $cfgDir 'cfg'
-Ok 'Configs in place. Crosshair included, no share code needed.'
+Ok 'Configs in place. Crosshair included, no share code needed.' `
+   'Конфиги на месте. Прицел внутри, код обмена не нужен.'
 
 if ($Video) {
-    if (-not $userCfg) { Warn 'No CS2 userdata folder. Log into Steam, run CS2 once, retry.' }
-    elseif ($VideoCfg.Count -eq 0) { Warn 'This pack has no video settings.' }
+    if (-not $userCfg) { Warn 'No CS2 userdata folder. Log into Steam, run CS2 once, retry.' `
+                              'Нет папки userdata для CS2. Войди в Steam, запусти игру один раз и повтори.' }
+    elseif ($VideoCfg.Count -eq 0) { Warn 'This pack has no video settings.' `
+                                          'В этом наборе нет настроек видео.' }
     else {
         Write-Host ''
-        Write-Host 'Writing video settings:'
+        Write-Host (L 'Writing video settings:' 'Пишу настройки видео:')
         Write-Payload $VideoCfg $userCfg 'video'
-        Warn 'Check the resolution in game: CS2 may re-detect the GPU and override some of it.'
+        Warn 'Check the resolution in game: CS2 may re-detect the GPU and override some of it.' `
+             'Проверь разрешение в игре: CS2 может заново определить видеокарту и часть настроек переписать.'
     }
 } else {
     Info ''
-    Info 'Video settings not touched. Pass -Video to apply them.'
+    Info 'Video settings not touched. Pass -Video to apply them.' `
+         'Настройки видео не тронуты. Передай -Video, чтобы применить и их.'
 }
 
 if ($Convars) {
-    if (-not $userCfg) { Warn 'No CS2 userdata folder. Cannot restore the cloud backup.' }
+    if (-not $userCfg) { Warn 'No CS2 userdata folder. Cannot restore the cloud backup.' `
+                              'Нет папки userdata для CS2. Вернуть копию из облака не получится.' }
     else {
         Write-Host ''
-        Write-Host 'Restoring Steam Cloud settings:'
-        Warn 'Close CS2 AND Steam first, or Steam overwrites these when it exits.'
+        Write-Host (L 'Restoring Steam Cloud settings:' 'Возвращаю настройки из Steam Cloud:')
+        Warn 'Close CS2 AND Steam first, or Steam overwrites these when it exits.' `
+             'Сначала закрой и CS2, и Steam: иначе Steam перезапишет их при выходе.'
         Write-Payload $CloudCfg $userCfg 'cloud'
     }
 }
 
 if (Test-Path $Backup) {
     Write-Host ''
-    Info "This PC's original files: $Backup"
-    Info 'Run with -Undo to put them back.'
+    Info "$(L 'Original files of this PC' 'Исходные файлы этого ПК'): $Backup"
+    Info 'Run with -Undo to put them back.' 'Запусти с -Undo, чтобы вернуть их на место.'
 }
 
 Write-Host ''
-Write-Host '=== BY HAND ================================================' -ForegroundColor Cyan
+Write-Host ((L '=== BY HAND ' '=== ВРУЧНУЮ ').PadRight(60, '=')) -ForegroundColor Cyan
 if ($LaunchOptions -ne '') {
     Write-Host ''
-    Write-Host 'Launch options (Steam > CS2 > Properties > General):' -ForegroundColor White
+    Write-Host (L 'Launch options (Steam > CS2 > Properties > General):' `
+                  'Параметры запуска (Steam > CS2 > Свойства > Общие):') -ForegroundColor White
     Write-Host ''
     Write-Host "   $LaunchOptions" -ForegroundColor Yellow
-    try { Set-Clipboard -Value $LaunchOptions; Write-Host ''; Info 'Copied to your clipboard. Just paste.' } catch { }
+    try {
+        Set-Clipboard -Value $LaunchOptions
+        Write-Host ''
+        Info 'Copied to your clipboard. Just paste.' 'Скопировано в буфер обмена. Просто вставь.'
+    } catch { }
 }
 Write-Host ''
-Write-Host 'If you play a stretched 4:3 resolution, set GPU scaling too:' -ForegroundColor White
-Write-Host 'NVIDIA Control Panel > Adjust desktop size and position > Full-screen,' -ForegroundColor White
-Write-Host 'scaling on GPU, tick Override the scaling mode set by games.' -ForegroundColor White
+Write-Host (L 'If you play a stretched 4:3 resolution, set GPU scaling too:' `
+              'Если играешь в растянутом 4:3, настрой ещё и масштабирование:') -ForegroundColor White
+Write-Host (L 'NVIDIA Control Panel > Adjust desktop size and position > Full-screen,' `
+              'Панель управления NVIDIA > Регулировка размера и положения > Во весь экран,') -ForegroundColor White
+Write-Host (L 'scaling on GPU, tick Override the scaling mode set by games.' `
+              'масштабирование на GPU, галочка «Замещение режима масштабирования, заданного играми».') -ForegroundColor White
 Write-Host ''
-Write-Host 'Then start CS2 and check your crosshair, sensitivity and binds.' -ForegroundColor White
+Write-Host (L 'Then start CS2 and check your crosshair, sensitivity and binds.' `
+              'Дальше запусти CS2 и проверь прицел, чувствительность и бинды.') -ForegroundColor White
 Write-Host ''
-Write-Host "Made with cs2-config: $ToolUrl" -ForegroundColor DarkGray
+Write-Host (L "Made with cs2-config: $ToolUrl" "Собрано утилитой cs2-config: $ToolUrl") -ForegroundColor DarkGray
 Write-Host ''

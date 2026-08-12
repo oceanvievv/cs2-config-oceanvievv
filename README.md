@@ -4,8 +4,11 @@ Packed by [cs2-config](https://github.com/oceanvievv/cs2-config).
 
 ## Installing the config on another PC
 
+Any one of these three. Take the first that works on that PC — they are alternatives, not
+steps.
+
 #### Installation file
-Download the [apply-config.cmd](the link) and launch it.
+Download [apply-config.cmd](https://github.com/oceanvievv/cs2-config-oceanvievv/blob/main/apply-config.cmd) and launch it.
 
 #### Copy configs manually
 Copy the files from `cfg\` into:
@@ -14,10 +17,13 @@ Copy the files from `cfg\` into:
 ...\steamapps\common\Counter-Strike Global Offensive\game\csgo\cfg\
 ```
 
+Then restart CS2. `autoexec.cfg` runs on startup and pulls in the rest. If the game is
+already open, `exec autoexec` in the console does the same thing once.
+
 #### Use CS2 console
 Open `apply-config-using-console.txt` and copy everything, then paste into the CS2 console.
 
-Configs and crosshair only.
+For a PC where you cannot write files at all. Configs and crosshair only.
 
 ## Launch options
 
@@ -38,15 +44,26 @@ Your full version, for home:
 ## What is in here
 
 ```
-apply-config.cmd                 applies the settings; your configs are embedded in it
-apply-config-using-console.txt   one line to paste into the console, see option 4
-update-config.cmd                re-reads your settings and rebuilds this folder
-cfg\autoexec.cfg                 runs automatically on startup
-cfg\crosshair.cfg                your crosshair, no share code needed
+apply-config.cmd                 Applies the settings; your configs are embedded in it
+apply-config-using-console.txt   One line to paste into the CS2 console
+update-config.cmd                Re-reads your settings and rebuilds this folder
+.gitattributes                   Keeps the line endings that a downloaded .cmd needs
+cfg\autoexec.cfg                 Runs automatically on startup
+cfg\crosshair.cfg                Your crosshair
 cfg\knife.cfg
-cfg\oceanvievv.cfg               your main config
+cfg\oceanvievv.cfg               Your main config
 cfg\training.cfg
-video\cs2_video.txt              resolution and quality
-cloud-backup\cs2_user_convars_0_slot0.vcfg  what Steam Cloud normally brings
-cloud-backup\cs2_user_keys_0_slot0.vcfg  what Steam Cloud normally brings
+video\cs2_video.txt              Resolution and quality
+cloud-backup\cs2_user_convars_0_slot0.vcfg  What Steam Cloud normally brings
+cloud-backup\cs2_user_keys_0_slot0.vcfg  What Steam Cloud normally brings
 ```
+
+The crosshair is applied as convars, so there is nothing to paste. The share code, if you
+want it anyway:
+
+```
+CSGO-v2QEv-LYcjt-cyv7q-Yhiow-YpybE
+```
+
+`cloud-backup\` is a copy of what Steam Cloud normally delivers. You usually never need
+it: logging into Steam brings your sensitivity, crosshair and binds down by itself.
