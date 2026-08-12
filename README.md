@@ -35,13 +35,6 @@ Your full version, for home:
 +fps_max 0 -high -forcenovsync -softparticlesdefaultoff +mat_disable_fancy_blending 1 -nojoy -threads 8 -novid +engine_low_latency_sleep_after_client_tick true -language english
 ```
 
-Dropped, because they do not travel well:
-
-- `-high` — high priority can starve audio and input on a faster CPU
-- `-softparticlesdefaultoff` — lowers quality to gain fps you may not need
-- `+mat_disable_fancy_blending 1` — lowers quality to gain fps you may not need
-- `-threads 8` — thread count is specific to this CPU
-
 ## What is in here
 
 ```
