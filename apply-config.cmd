@@ -208,6 +208,86 @@ function Write-Payload($map, $destDir, $tag) {
         [IO.File]::WriteAllLines((Join-Path $bdir '_added.txt'), $added)
     }
 }
+
+# A video config is two things in one file: the settings you picked, and a fingerprint
+# of the PC that wrote them - vendor and device id of the card, monitor, refresh rate.
+# Handed a file whose fingerprint belongs to somebody else's card, CS2 decides the file is
+# not its own, re-detects the hardware and writes its own defaults over all of it. That is
+# why the video settings never survived on a club PC. So the fingerprint is never copied:
+# those lines come from the file this PC already has, only the settings come from the pack.
+$VideoLocalKeys = @('Version', 'VendorID', 'DeviceID', 'Autoconfig',
+                    'setting.knowndevice', 'setting.monitor_index',
+                    'setting.refreshrate_numerator', 'setting.refreshrate_denominator',
+                    'setting.high_dpi')
+
+function Get-VideoIdentity($destPath) {
+    $map = [ordered]@{}
+    if (Test-Path $destPath) {
+        foreach ($line in ([IO.File]::ReadAllText($destPath) -split "`r?`n")) {
+            if ($line -match '^\s*"([^"]+)"\s+"(.*)"\s*$' -and $VideoLocalKeys -contains $matches[1]) {
+                $map[$matches[1]] = $matches[2]
+            }
+        }
+        # Without those two there is no fingerprint to keep, and the file is of no use.
+        if ($map.Contains('VendorID') -and $map.Contains('DeviceID')) { return $map }
+    }
+    # No file yet: this account has never started CS2 here. Windows knows the card anyway.
+    $map  = [ordered]@{}
+    $best = $null
+    try {
+        foreach ($c in (Get-CimInstance Win32_VideoController -ErrorAction Stop)) {
+            if ("$($c.PNPDeviceID)" -notmatch 'VEN_([0-9A-Fa-f]{4})&DEV_([0-9A-Fa-f]{4})') { continue }
+            $ven = [Convert]::ToInt32($matches[1], 16)
+            $dev = [Convert]::ToInt32($matches[2], 16)
+            # 4318 is NVIDIA, 4098 is AMD. A machine that has one of those renders the game
+            # on it, and the Intel chip listed next to it only drives the desktop.
+            $rank = 0
+            if ($ven -eq 4318 -or $ven -eq 4098) { $rank = 1 }
+            if (-not $best -or $rank -gt $best.Rank) {
+                $best = [pscustomobject]@{ Rank = $rank; Ven = $ven; Dev = $dev; Hz = $c.CurrentRefreshRate }
+            }
+        }
+    } catch { }
+    if ($best) {
+        $map['VendorID']            = "$($best.Ven)"
+        $map['DeviceID']            = "$($best.Dev)"
+        $map['setting.knowndevice'] = '1'
+        if ($best.Hz -and [int]$best.Hz -gt 0) {
+            $map['setting.refreshrate_numerator']   = "$([int]$best.Hz * 1000)"
+            $map['setting.refreshrate_denominator'] = '1000'
+        }
+    }
+    return $map
+}
+
+function Merge-VideoCfg($packText, $destPath) {
+    $local = Get-VideoIdentity $destPath
+    if ($local.Count -eq 0) { return $packText }
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($line in ($packText -split "`r?`n")) {
+        if ($line -match '^(\s*"([^"]+)"\s+")(.*)("\s*)$' -and $local.Contains($matches[2])) {
+            $out.Add($matches[1] + $local[$matches[2]] + $matches[4])
+        } else {
+            $out.Add($line)
+        }
+    }
+    return ($out -join "`n")
+}
+
+# The pack as it applies to this one PC. -Check is given the same thing, otherwise it
+# reports a difference on lines that are never going to be written.
+function Get-VideoPayload($map, $destDir) {
+    if (-not $destDir) { return $map }
+    $out = [ordered]@{}
+    foreach ($name in $map.Keys) { $out[$name] = Merge-VideoCfg $map[$name] (Join-Path $destDir $name) }
+    return $out
+}
+
+# CS2 keeps its own copy of these files in memory and writes them out when it exits, so
+# anything written underneath a running game is gone the moment the game is closed.
+function Test-CS2Running {
+    return [bool](Get-Process -Name 'cs2' -ErrorAction SilentlyContinue)
+}
 $GameCfg = [ordered]@{}
 $GameCfg['autoexec.cfg'] = @'
 // CS2 runs this file automatically on startup.
@@ -716,6 +796,7 @@ $MachineCfg['cs2_machine_convars.vcfg'] = @'
 $PackName      = 'oceanvievv'
 $LaunchOptions = '+fps_max 0 -forcenovsync -nojoy -novid +engine_low_latency_sleep_after_client_tick true -language english -w 1440 -h 1080 -fullscreen +exec autoexec'
 $ToolUrl       = 'https://github.com/oceanvievv/cs2-config'
+$PackTool      = '1.3.0'
 
 # No switch on the command line means somebody double-clicked the launcher, so ask. The
 # menu lives here and not in the .cmd above it: this half already knows the display
@@ -757,6 +838,12 @@ if (-not $cfgDir) { Die 'CS2 not found in any Steam library. Install CS2 first.'
 $userCfg = Get-UserCfgPath $steam
 Ok ((L 'CS2 cfg folder' 'Папка cfg').PadRight(17) + $cfgDir)
 
+# Written now, overwritten on exit: worth saying before the writing starts, not after.
+if ((-not ($Check -or $Undo)) -and (Test-CS2Running)) {
+    Warn 'CS2 is running. Close it now: on the way out it writes its own video and convar files over everything below.' `
+         'CS2 запущена. Закрой её сейчас: при выходе она перезапишет своими файлами всё, что ниже.'
+}
+
 # --- undo -------------------------------------------------------------------------
 if ($Undo) {
     if (-not (Test-Path $BackupRoot)) { Die 'No backup found on this PC. Nothing to undo.' `
@@ -797,7 +884,7 @@ if ($Check) {
                   'Сравниваю набор с тем, что на ПК (ничего не записывается):')
     Compare-Payload $GameCfg  $cfgDir  'cfg'
     if ($userCfg) {
-        Compare-Payload $VideoCfg   $userCfg 'video'
+        Compare-Payload (Get-VideoPayload $VideoCfg $userCfg) $userCfg 'video'
         Compare-Payload $MachineCfg $userCfg 'machine'
         Compare-Payload $CloudCfg   $userCfg 'cloud'
     }
@@ -834,9 +921,11 @@ if ($Video) {
     else {
         Write-Host ''
         Write-Host (L 'Writing video settings:' 'Пишу настройки видео:')
-        Write-Payload $VideoCfg $userCfg 'video'
-        Warn 'On a different GPU, CS2 re-detects and overrides some of this. The resolution is in the launch options for that reason.' `
-             'На другой видеокарте CS2 определит её заново и часть этого перепишет. Поэтому разрешение продублировано в параметрах запуска.'
+        Write-Payload (Get-VideoPayload $VideoCfg $userCfg) $userCfg 'video'
+        Info 'Card, monitor and refresh rate are left as this PC had them, so CS2 takes the file as its own instead of re-detecting over it.' `
+             'Видеокарту, монитор и частоту обновления оставил как на этом ПК: CS2 примет файл за свой и не станет определять железо заново.'
+        Info 'The resolution is in the launch options too: those are read before the game opens this file at all.' `
+             'Разрешение продублировал и в параметрах запуска — игра читает их раньше, чем откроет этот файл.'
     }
 } else {
     Info ''
@@ -887,5 +976,5 @@ Write-Host ''
 Write-Host (L 'Then start CS2 and check your crosshair, sensitivity and binds.' `
               'Дальше запусти CS2 и проверь прицел, чувствительность и бинды.') -ForegroundColor White
 Write-Host ''
-Write-Host (L "Made with cs2-config: $ToolUrl" "Собрано утилитой cs2-config: $ToolUrl") -ForegroundColor DarkGray
+Write-Host (L "Made with cs2-config ${PackTool}: $ToolUrl" "Собрано утилитой cs2-config ${PackTool}: $ToolUrl") -ForegroundColor DarkGray
 Write-Host ''

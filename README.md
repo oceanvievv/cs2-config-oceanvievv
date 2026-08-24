@@ -1,6 +1,6 @@
 # CS2 config
 
-Packed by [cs2-config](https://github.com/oceanvievv/cs2-config).
+Packed by [cs2-config](https://github.com/oceanvievv/cs2-config) 1.3.0.
 
 ## Installing the config on another PC
 
@@ -9,6 +9,9 @@ steps.
 
 #### Installation file
 Download [apply-config.cmd](https://github.com/oceanvievv/cs2-config-oceanvievv/blob/main/apply-config.cmd) and launch it.
+
+Close CS2 before you do. A running game holds its own copy of the video settings and
+writes them back over yours on the way out.
 
 #### Copy configs manually
 Copy the files from `cfg\` into:
@@ -46,7 +49,7 @@ Your full version, for home:
 ```
 apply-config.cmd                 Applies the settings; your configs are embedded in it
 apply-config-using-console.txt   One line to paste into the CS2 console
-update-config.cmd                Re-reads your settings and rebuilds this folder
+update-config.cmd                Updates itself, then rebuilds this folder
 .gitattributes                   Keeps the line endings that a downloaded .cmd needs
 cfg\autoexec.cfg                 Runs automatically on startup
 cfg\crosshair.cfg                Your crosshair

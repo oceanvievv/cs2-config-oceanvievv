@@ -1,6 +1,6 @@
 # Конфиг CS2
 
-Собран утилитой [cs2-config](https://github.com/oceanvievv/cs2-config).
+Собран утилитой [cs2-config](https://github.com/oceanvievv/cs2-config) 1.3.0.
 
 ## Установка конфига на другом компьютере
 
@@ -9,6 +9,9 @@
 
 #### Файл установки
 Скачай [apply-config.cmd](https://github.com/oceanvievv/cs2-config-oceanvievv/blob/main/apply-config.cmd) и запусти его.
+
+Сначала закрой CS2. Запущенная игра держит свои настройки видео в памяти и при выходе
+перезапишет ими твои.
 
 #### Скопировать конфиги вручную
 Скопируй файлы из `cfg\` в папку:
@@ -46,7 +49,7 @@ Steam > CS2 > «Свойства» > «Общие».
 ```
 apply-config.cmd                 Применяет настройки; конфиги лежат внутри него же
 apply-config-using-console.txt   Одна строка для вставки в консоль CS2
-update-config.cmd                Перечитывает настройки и пересобирает эту папку
+update-config.cmd                Обновляется сам и пересобирает эту папку
 .gitattributes                   Хранит переводы строк, нужные скачанному .cmd
 cfg\autoexec.cfg                 Запускается сам при старте игры
 cfg\crosshair.cfg                Твой прицел
