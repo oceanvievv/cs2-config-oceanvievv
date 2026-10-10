@@ -1,2 +1,2 @@
-*.cmd -text
+*.exe binary
 *.ps1 text eol=crlf

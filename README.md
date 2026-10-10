@@ -1,6 +1,6 @@
 # cs2-config-oceanvievv
 
-Run **apply-config.cmd**, choose **Apply profile**, then choose a profile explicitly. Review the settings and select **Apply**.
+Run **cs2-config.exe**, choose **Apply profile**, then choose a profile explicitly. Review the settings and select **Apply**.
 
 Close CS2 before applying or capturing settings. Sign in to Steam first. Applying a profile creates missing settings folders; no preliminary CS2 launch is required.
 
@@ -11,16 +11,16 @@ Close CS2 before applying or capturing settings. Sign in to Steam first. Applyin
 
 ## Update a profile
 
-Change settings in CS2 or launch options in Steam, exit CS2, run **update-config.cmd**, and select the profile to update. Review the changes and choose **Save changes**. Only the selected profile is replaced. No previous versions are retained.
+Change settings in CS2 or launch options in Steam, exit CS2, run **cs2-config.exe**, choose **Update profile**, and select the profile to update. Review the changes and choose **Save changes**. Only the selected profile is replaced. No previous versions are retained.
 
 ## Create a profile
 
-Run **setup.cmd** or choose **Create profile** in the main menu. Enter any unique name, review the settings and destination, then choose **Create profile**.
+Run **cs2-config.exe** and choose **Create profile** in the main menu. Enter any unique name, review the settings and destination, then choose **Create profile**.
 
 ## Rename the config
 
 Choose **Rename config** in the main menu and enter a new name. The config name is
-updated in the saved data, CMD launchers, README headings and window title. Profile
+updated in the saved data, executable, README headings and window title. Profile
 names and settings, the folder and the GitHub repository remain unchanged.
 
 Choose **Rename profile**, select a profile and enter its new name to rename only
@@ -40,11 +40,11 @@ Supported settings: crosshair, mouse, audio and controls.
 
 ## Files and results
 
-**profiles.json** is the editable source for this config. Keep it beside the CMD files. Each CMD also contains all profiles, so a downloaded **apply-config.cmd** can run on its own. Rebuilding updates all launchers and console files. Saved and checked means the values were verified on disk; check the actual result after starting CS2. Skipped settings and write failures are listed separately.
+**profiles.json** is the editable source for this config. Keep it beside the executable. The executable also contains all profiles, so a downloaded **cs2-config.exe** can run on its own. Rebuilding updates the executable and console files. Saved and checked means the values were verified on disk; check the actual result after starting CS2. Skipped settings and write failures are listed separately.
 
 ## Publish or update on GitHub
 
-Open your config repository, choose **Add file > Upload files**, upload the updated folder contents and choose **Commit changes**. Download a fresh **apply-config.cmd** on another PC; previously downloaded files keep their embedded settings.
+Open your config repository, choose **Add file > Upload files**, upload the updated folder contents and choose **Commit changes**. Download a fresh **cs2-config.exe** on another PC; previously downloaded files keep their embedded settings.
 
 ## Config notes
 
