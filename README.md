@@ -6,8 +6,8 @@ Close CS2 before applying or capturing settings. Sign in to Steam first. Applyin
 
 ## Profiles
 
-- **Домашний**: [console commands](console/profile-%D0%94%D0%BE%D0%BC%D0%B0%D1%88%D0%BD%D0%B8%D0%B9-d185ed7c.txt)
-- **Клубный**: [console commands](console/profile-%D0%9A%D0%BB%D1%83%D0%B1%D0%BD%D1%8B%D0%B9-74f7c583.txt)
+- **Home**: [console commands](console/profile-Home-d185ed7c.txt)
+- **hightab**: [console commands](console/profile-hightab-74f7c583.txt)
 
 ## Update a profile
 

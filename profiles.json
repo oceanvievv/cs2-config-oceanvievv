@@ -4,7 +4,7 @@
   "profiles": [
     {
       "id": "d185ed7c8ae249de9aaac6a86e9f122c",
-      "name": "Домашний",
+      "name": "Home",
       "updatedAt": "2026-10-10T14:37:52.1423544Z",
       "gameFiles": {
         "autoexec.cfg": "// CS2 runs this file automatically on startup.\r\n// It stays tiny on purpose - it just chains to the real config,\r\n// so there is only one place to edit.\r\n\r\nexec oceanvievv\r\n\r\n// Force the settings above to be written to disk so they survive\r\n// the next time CS2 saves its own config.\r\nhost_writeconfig\r\n\r\n// ---- added by cs2-config ----\r\nexec crosshair\r\nhost_writeconfig\r\n",
@@ -366,7 +366,7 @@
     },
     {
       "id": "74f7c583024045598ddf637c113fbe35",
-      "name": "Клубный",
+      "name": "hightab",
       "updatedAt": "2026-10-10T14:37:52.1423544Z",
       "gameFiles": {
         "autoexec.cfg": "// CS2 runs this file automatically on startup.\r\n// It stays tiny on purpose - it just chains to the real config,\r\n// so there is only one place to edit.\r\n\r\nexec oceanvievv\r\n\r\n// Force the settings above to be written to disk so they survive\r\n// the next time CS2 saves its own config.\r\nhost_writeconfig\r\n\r\n// ---- added by cs2-config ----\r\nexec crosshair\r\nhost_writeconfig\r\n",
