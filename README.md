@@ -1,73 +1,43 @@
-# CS2 config
+# cs2-config-oceanvievv
 
-Packed by [cs2-config](https://github.com/oceanvievv/cs2-config) 1.3.0.
+Run **apply-config.cmd**, choose **Apply profile**, then choose a profile explicitly. Review the settings and select **Apply**.
 
-## Installing the config on another PC
+Close CS2 before applying or capturing settings. Sign in to Steam first. Applying a profile creates missing settings folders; no preliminary CS2 launch is required.
 
-Any one of these three. Take the first that works on that PC — they are alternatives, not
-steps.
+## Profiles
 
-#### Installation file
-Download [apply-config.cmd](https://github.com/oceanvievv/cs2-config-oceanvievv/blob/main/apply-config.cmd) and launch it.
+- **Домашний**: [console commands](console/profile-%D0%94%D0%BE%D0%BC%D0%B0%D1%88%D0%BD%D0%B8%D0%B9-d185ed7c.txt)
+- **Клубный**: [console commands](console/profile-%D0%9A%D0%BB%D1%83%D0%B1%D0%BD%D1%8B%D0%B9-74f7c583.txt)
 
-Close CS2 before you do. A running game holds its own copy of the video settings and
-writes them back over yours on the way out.
+## Update a profile
 
-#### Copy configs manually
-Copy the files from `cfg\` into:
+Change settings in CS2 or launch options in Steam, exit CS2, run **update-config.cmd**, and select the profile to update. Review the changes and choose **Save changes**. Only the selected profile is replaced. No previous versions are retained.
 
-```
-...\steamapps\common\Counter-Strike Global Offensive\game\csgo\cfg\
-```
+## Create a profile
 
-Then restart CS2. `autoexec.cfg` runs on startup and pulls in the rest. If the game is
-already open, `exec autoexec` in the console does the same thing once.
-
-#### Use CS2 console
-Open `apply-config-using-console.txt` and copy everything, then paste into the CS2 console.
-
-For a PC where you cannot write files at all. Configs and crosshair only.
+Run **setup.cmd** or choose **Create profile** in the main menu. Enter any unique name, review the settings and destination, then choose **Create profile**.
 
 ## Launch options
 
-Steam > CS2 > Properties > General.
+The profile stores the exact launch options read from Steam. After applying, paste the displayed line into **Steam > CS2 > Properties > General > Launch Options**. An empty line means clearing that field. Launch options are a manual step.
 
-Portable version, safe on unknown hardware:
+If the requested fullscreen refresh rate exceeds the maximum available at the profile's resolution, the utility uses that maximum and reports the adjustment. The saved profile is unchanged. Explicit refresh arguments in the displayed launch-options line are adjusted for this application too. Unavailable resolutions are skipped.
 
-```
-+fps_max 0 -forcenovsync -nojoy -novid +engine_low_latency_sleep_after_client_tick true -language english -w 1440 -h 1080 -fullscreen +exec autoexec
-```
+## Console alternative
 
-Your full version, for home:
+Open the command file for your profile above. Paste its commands into the CS2 console in small batches, then check your settings in CS2.
 
-```
-+fps_max 0 -high -forcenovsync -softparticlesdefaultoff +mat_disable_fancy_blending 1 -nojoy -threads 8 -novid +engine_low_latency_sleep_after_client_tick true -language english
-```
+Supported settings: crosshair, mouse, audio and controls.
 
-## What is in here
+## Files and results
 
-```
-apply-config.cmd                 Applies the settings; your configs are embedded in it
-apply-config-using-console.txt   One line to paste into the CS2 console
-update-config.cmd                Updates itself, then rebuilds this folder
-.gitattributes                   Keeps the line endings that a downloaded .cmd needs
-cfg\autoexec.cfg                 Runs automatically on startup
-cfg\crosshair.cfg                Your crosshair
-cfg\knife.cfg
-cfg\oceanvievv.cfg               Your main config
-cfg\training.cfg
-video\cs2_video.txt              Resolution and quality
-machine\cs2_machine_convars.vcfg  Radar, fov, volumes: what Steam Cloud does not carry
-cloud-backup\cs2_user_convars_0_slot0.vcfg  What Steam Cloud normally brings
-cloud-backup\cs2_user_keys_0_slot0.vcfg  What Steam Cloud normally brings
-```
+**profiles.json** is the editable source for this config. Keep it beside the CMD files. Each CMD also contains all profiles, so a downloaded **apply-config.cmd** can run on its own. Rebuilding updates all launchers and console files. Saved and checked means the values were verified on disk; check the actual result after starting CS2. Skipped settings and write failures are listed separately.
 
-The crosshair is applied as convars, so there is nothing to paste. The share code, if you
-want it anyway:
+## Publish or update on GitHub
 
-```
-CSGO-v2QEv-LYcjt-cyv7q-Yhiow-YpybE
-```
+Open your config repository, choose **Add file > Upload files**, upload the updated folder contents and choose **Commit changes**. Download a fresh **apply-config.cmd** on another PC; previously downloaded files keep their embedded settings.
 
-`cloud-backup\` is a copy of what Steam Cloud normally delivers. You usually never need
-it: logging into Steam brings your sensitivity, crosshair and binds down by itself.
+## Config notes
+
+System.Collections.Specialized.OrderedDictionary
+System.Collections.Specialized.OrderedDictionary
