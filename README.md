@@ -17,6 +17,15 @@ Change settings in CS2 or launch options in Steam, exit CS2, run **update-config
 
 Run **setup.cmd** or choose **Create profile** in the main menu. Enter any unique name, review the settings and destination, then choose **Create profile**.
 
+## Rename the config
+
+Choose **Rename config** in the main menu and enter a new name. The config name is
+updated in the saved data, CMD launchers, README headings and window title. Profile
+names and settings, the folder and the GitHub repository remain unchanged.
+
+Choose **Rename profile**, select a profile and enter its new name to rename only
+that profile. Its settings stay unchanged; console file links are updated.
+
 ## Launch options
 
 The profile stores the exact launch options read from Steam. After applying, paste the displayed line into **Steam > CS2 > Properties > General > Launch Options**. An empty line means clearing that field. Launch options are a manual step.
