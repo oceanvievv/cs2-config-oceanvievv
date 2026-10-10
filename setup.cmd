@@ -17,7 +17,7 @@ param([ValidateSet('menu','create','update','apply')][string]$Mode = 'create')
 $ErrorActionPreference = 'Stop'
 # BEGIN CORE
 # Windows PowerShell 5.1. Profiles are data, never executable PowerShell.
-$TOOL_VERSION = '2.1.0'
+$TOOL_VERSION = '2.2.0'
 $script:Utf8 = New-Object Text.UTF8Encoding($false)
 function ConvertTo-Map($Value) {
     if ($null -eq $Value) { return $null }
@@ -254,14 +254,14 @@ function Get-Context {
     $steam = Find-Steam
     while (-not $steam -or -not (Test-Path -LiteralPath (Join-Path $steam 'steam.exe'))) {
         Show-Header 'Steam installation not found'
-        $steam = Read-Host 'Steam folder (0 to go back)'
+        $steam = Read-TerminalLine 'Steam folder (0 to go back)'
         if ($steam -eq '0') { return $null }
         $steam = $steam.Trim().Trim('"')
     }
     $game = Find-Game $steam
     while (-not $game -or -not (Test-Path -LiteralPath (Join-Path $game 'game\csgo\cfg'))) {
         Show-Header 'CS2 installation not found'
-        $game = Read-Host 'CS2 installation folder (0 to go back)'
+        $game = Read-TerminalLine 'CS2 installation folder (0 to go back)'
         if ($game -eq '0') { return $null }
         $game = $game.Trim().Trim('"')
     }
@@ -274,8 +274,8 @@ function Get-Context {
     if (-not $accountId) {
         if (-not $accounts.Count) { throw 'Sign in to Steam with the account you want to use, then retry.' }
         Show-Header 'Choose a Steam account'
-        for ($i=0; $i -lt $accounts.Count; $i++) { Write-Host "  [$($i+1)] $($accounts[$i].Name) (account $($accounts[$i].Id))" }
-        Write-Host '  [0] Back'
+        for ($i=0; $i -lt $accounts.Count; $i++) { Write-TerminalText "  [$($i+1)] $($accounts[$i].Name) (account $($accounts[$i].Id))" }
+        Write-TerminalText '  [0] Back'
         $index = Read-Choice (0..$accounts.Count)
         if ($index -eq 0) { return $null }
         $accountId = $accounts[$index-1].Id
@@ -510,7 +510,8 @@ $ErrorActionPreference = 'Stop'
 $script:CoreSource = [IO.File]::ReadAllText($PSCommandPath)
 $script:CoreSource = [regex]::Match($script:CoreSource,'(?ms)^# BEGIN CORE\r?\n(.*?)^# END CORE\r?$').Groups[1].Value.Trim()
 try { Start-ConfigTool $Mode $env:CS2_PACK_ROOT '__PAYLOAD__' }
-catch { Write-Host ''; Write-Host $_.Exception.Message -ForegroundColor Yellow; Write-Host ''; [void](Read-Host 'Press Enter to close'); exit 1 }
+catch { Stop-TerminalView; Write-Host ''; Write-Host $_.Exception.Message -ForegroundColor Yellow; Write-Host ''; [void](Read-Host 'Press Enter to close'); exit 1 }
+finally { Stop-TerminalView }
 '@
     $text = $header.Replace('__MODE__',$Mode) + "`n" + $entry.Replace('__MODE__',$Mode) + "`n# BEGIN CORE`n" + $Core.Trim() + "`n# END CORE`n" + $tail.Replace('__PAYLOAD__',$encoded)
     return ($text -replace "`r?`n", "`r`n") + "`r`n"
@@ -629,6 +630,215 @@ function Import-LegacyProfile($Root,$Name) {
     }
 }
 
+function Initialize-TerminalViewApi {
+    if ('CS2TerminalView' -as [type]) { return }
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -ReferencedAssemblies System.Windows.Forms -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class CS2TerminalView {
+    [StructLayout(LayoutKind.Sequential)] public struct Coord {
+        public short X, Y;
+        public Coord(int x, int y) { X=(short)x; Y=(short)y; }
+    }
+    [StructLayout(LayoutKind.Sequential)] public struct Rect { public short Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Explicit, CharSet=CharSet.Unicode)] public struct Cell {
+        [FieldOffset(0)] public char Character;
+        [FieldOffset(2)] public ushort Attributes;
+    }
+    [StructLayout(LayoutKind.Explicit, Size=20, CharSet=CharSet.Unicode)] public struct Input {
+        [FieldOffset(0)] public ushort Type;
+        [FieldOffset(4)] public int KeyDown;
+        [FieldOffset(8)] public ushort Repeat;
+        [FieldOffset(10)] public ushort Key;
+        [FieldOffset(14)] public char Character;
+        [FieldOffset(16)] public uint Control;
+        [FieldOffset(4)] public Coord Mouse;
+        [FieldOffset(8)] public uint Buttons;
+        [FieldOffset(16)] public uint MouseFlags;
+    }
+    [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int handle);
+    [DllImport("kernel32.dll")] static extern bool GetConsoleMode(IntPtr handle, out uint mode);
+    [DllImport("kernel32.dll")] static extern bool SetConsoleMode(IntPtr handle, uint mode);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode)] static extern bool WriteConsoleOutputW(IntPtr handle, Cell[] cells, Coord size, Coord origin, ref Rect region);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode)] static extern bool ReadConsoleInputW(IntPtr handle, [Out] Input[] records, uint count, out uint read);
+    [DllImport("kernel32.dll")] static extern IntPtr GetConsoleWindow();
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+
+    class Line {
+        public string Text;
+        public ushort Color;
+        public Line(string text, ushort color) { Text=text; Color=color; }
+    }
+    static readonly List<Line> lines=new List<Line>();
+    static readonly Dictionary<string,int> positions=new Dictionary<string,int>();
+    static IntPtr input, output;
+    static uint originalMode;
+    static int originalWidth, originalHeight, offset, maximum, pageHeight;
+    static string screen="";
+    static ushort normalColor;
+    static bool feedback;
+    public static bool Active { get; private set; }
+    public static bool Cancelled { get; private set; }
+    public static int ScrollOffset { get { return offset; } }
+    public static int PromptRow { get; private set; }
+
+    public static bool Start() {
+        if (Active) return true;
+        input=GetStdHandle(-10); output=GetStdHandle(-11);
+        if (!GetConsoleMode(input,out originalMode) || Console.WindowWidth<4 || Console.WindowHeight<5) return false;
+        originalWidth=Console.BufferWidth; originalHeight=Console.BufferHeight;
+        normalColor=(ushort)((int)Console.ForegroundColor | ((int)Console.BackgroundColor<<4));
+        // Mouse events replace native scrollback; typed characters are rendered only in the footer.
+        if (!SetConsoleMode(input,(originalMode | 0x0098u) & ~0x0047u)) return false;
+        Active=true;
+        Cancelled=false; feedback=false;
+        lines.Clear(); positions.Clear(); screen=""; offset=0;
+        try { FitBuffer(); return true; } catch { Stop(); return false; }
+    }
+    public static bool HasVisibleConsole() { return IsWindowVisible(GetConsoleWindow()); }
+    static void FitBuffer() {
+        int width=Console.WindowWidth, height=Console.WindowHeight;
+        if (Console.WindowLeft!=0 || Console.WindowTop!=0) Console.SetWindowPosition(0,0);
+        if (Console.BufferWidth!=width || Console.BufferHeight!=height) Console.SetBufferSize(width,height);
+    }
+    public static void Stop() {
+        if (!Active) return;
+        SetConsoleMode(input,originalMode);
+        try { Console.SetBufferSize(Math.Max(originalWidth,Console.WindowWidth),Math.Max(originalHeight,Console.WindowHeight)); } catch { }
+        Active=false;
+    }
+    public static void Begin(string key) {
+        if (!feedback) positions[screen]=offset;
+        screen=key ?? "";
+        if (!positions.TryGetValue(screen,out offset)) offset=0;
+        lines.Clear();
+        feedback=false;
+    }
+    public static void Add(string text, int color) {
+        ushort attributes=color<0 ? normalColor : (ushort)((normalColor & 0xF0) | color);
+        foreach (string line in (text ?? "").Replace("\r","").Replace("\t","    ").Split('\n')) lines.Add(new Line(line,attributes));
+        if (feedback && !String.IsNullOrWhiteSpace(text)) offset=Int32.MaxValue;
+    }
+    static List<Line> Wrap(int width) {
+        var result=new List<Line>();
+        foreach (Line line in lines) {
+            if (line.Text.Length==0) result.Add(line);
+            else for (int start=0;start<line.Text.Length;start+=width)
+                result.Add(new Line(line.Text.Substring(start,Math.Min(width,line.Text.Length-start)),line.Color));
+        }
+        return result;
+    }
+    static void Put(Cell[] cells,int width,int row,string text,ushort color) {
+        for (int x=0;x<Math.Min(width,text.Length);x++) {
+            cells[row*width+x].Character=text[x]; cells[row*width+x].Attributes=color;
+        }
+    }
+    public static void Render(string prompt,string value,int caret) {
+        FitBuffer();
+        int width=Console.WindowWidth, height=Console.WindowHeight;
+        if (width<4 || height<5) return;
+        pageHeight=height-3; PromptRow=height-1;
+        var body=Wrap(width-1);
+        maximum=Math.Max(0,body.Count-pageHeight);
+        offset=Math.Max(0,Math.Min(offset,maximum));
+        var cells=new Cell[width*height];
+        for (int i=0;i<cells.Length;i++) { cells[i].Character=' '; cells[i].Attributes=normalColor; }
+        for (int y=0;y<pageHeight && offset+y<body.Count;y++) Put(cells,width,y,body[offset+y].Text,body[offset+y].Color);
+        if (maximum>0) {
+            string hint=String.Format("Scroll: wheel / PgUp / PgDn   {0}-{1} of {2}",offset+1,Math.Min(body.Count,offset+pageHeight),body.Count);
+            Put(cells,width,height-3,hint,(ushort)((normalColor & 0xF0) | 8));
+            int thumb=(int)((long)offset*(pageHeight-1)/maximum);
+            for (int y=0;y<pageHeight;y++) {
+                cells[y*width+width-1].Character=y==thumb ? '\u2588' : '\u2502';
+                cells[y*width+width-1].Attributes=(ushort)((normalColor & 0xF0) | 8);
+            }
+        }
+        string prefix=(prompt ?? "")+": ";
+        if (prefix.Length>width/2) prefix=prefix.Substring(0,width/2);
+        int room=Math.Max(1,width-prefix.Length-1);
+        int start=Math.Max(0,caret-room+1);
+        string shown=value.Substring(start,Math.Min(room,value.Length-start));
+        Put(cells,width,PromptRow,prefix+shown,normalColor);
+        var region=new Rect { Left=0,Top=0,Right=(short)(width-1),Bottom=(short)(height-1) };
+        if (!WriteConsoleOutputW(output,cells,new Coord(width,height),new Coord(0,0),ref region)) throw new InvalidOperationException("The terminal could not be redrawn.");
+        Console.SetCursorPosition(Math.Min(width-1,prefix.Length+caret-start),PromptRow);
+    }
+    public static void Scroll(int rows) { offset=Math.Max(0,Math.Min(maximum,offset+rows)); }
+    public static string ReadLine(string prompt) {
+        var value=new StringBuilder(); int caret=0;
+        while (true) {
+            Render(prompt,value.ToString(),caret);
+            var records=new Input[1]; uint count;
+            if (!ReadConsoleInputW(input,records,1,out count)) throw new InvalidOperationException("The terminal input could not be read.");
+            if (count==0) continue;
+            Input record=records[0];
+            if (record.Type==2) {
+                if ((record.MouseFlags & 4)!=0) Scroll(-Math.Sign((short)(record.Buttons>>16))*3);
+                else if ((record.Buttons & 1)!=0 && record.Mouse.X==Console.WindowWidth-1 && maximum>0)
+                    offset=(int)((long)Math.Max(0,Math.Min(pageHeight-1,(int)record.Mouse.Y))*maximum/Math.Max(1,pageHeight-1));
+                continue;
+            }
+            if (record.Type!=1 || record.KeyDown==0) continue;
+            if ((record.Control & 12)!=0 && record.Key==67) { Cancelled=true; return "0"; }
+            if (record.Key==13) { positions[screen]=offset; feedback=true; return value.ToString(); }
+            if (((record.Control & 12)!=0 && record.Key==86) || ((record.Control & 16)!=0 && record.Key==45)) {
+                try {
+                    string pasted=System.Windows.Forms.Clipboard.GetText();
+                    foreach (char ch in pasted) if (!Char.IsControl(ch) && value.Length<4096) value.Insert(caret++,ch);
+                } catch { }
+                continue;
+            }
+            if (record.Key==33) { Scroll(-pageHeight); continue; }
+            if (record.Key==34) { Scroll(pageHeight); continue; }
+            if (record.Key==38) { Scroll(-1); continue; }
+            if (record.Key==40) { Scroll(1); continue; }
+            if ((record.Control & 12)!=0 && record.Key==36) { offset=0; continue; }
+            if ((record.Control & 12)!=0 && record.Key==35) { offset=maximum; continue; }
+            if (record.Key==36) { caret=0; continue; }
+            if (record.Key==35) { caret=value.Length; continue; }
+            if (record.Key==37) { caret=Math.Max(0,caret-1); continue; }
+            if (record.Key==39) { caret=Math.Min(value.Length,caret+1); continue; }
+            if (record.Key==8) { if (caret>0) value.Remove(--caret,1); continue; }
+            if (record.Key==46) { if (caret<value.Length) value.Remove(caret,1); continue; }
+            if (!Char.IsControl(record.Character) && value.Length<4096) {
+                for (int n=0;n<Math.Max(1,(int)record.Repeat) && value.Length<4096;n++) value.Insert(caret++,record.Character);
+            }
+        }
+    }
+}
+'@
+}
+function Start-TerminalView {
+    $script:TerminalViewActive=$false
+    if ([Console]::IsOutputRedirected -or [Console]::IsInputRedirected) { return }
+    try {
+        Initialize-TerminalViewApi
+        if ([CS2TerminalView]::HasVisibleConsole()) { $script:TerminalViewActive=[CS2TerminalView]::Start() }
+    } catch { $script:TerminalViewActive=$false }
+}
+function Stop-TerminalView {
+    if ($script:TerminalViewActive) { [CS2TerminalView]::Stop(); $script:TerminalViewActive=$false }
+}
+function Write-TerminalText($Object='', $ForegroundColor) {
+    if ($script:TerminalViewActive) {
+        $color=if ($null -eq $ForegroundColor) {-1} else {[int][ConsoleColor]$ForegroundColor}
+        [CS2TerminalView]::Add([string]$Object,$color)
+    } elseif ($null -eq $ForegroundColor) { Write-Host $Object }
+    else { Write-Host $Object -ForegroundColor $ForegroundColor }
+}
+function Read-TerminalLine([string]$Prompt) {
+    if ($script:TerminalViewActive) {
+        $value=[CS2TerminalView]::ReadLine($Prompt)
+        if ([CS2TerminalView]::Cancelled) { $script:ExitRequested=$true }
+        return $value
+    }
+    return Read-Host $Prompt
+}
+
 function Initialize-TerminalWindowApi {
     if ('CS2TerminalWindow' -as [type]) { return }
     Add-Type -TypeDefinition @'
@@ -713,34 +923,36 @@ function Initialize-Terminal {
         Initialize-TerminalWindowApi
         [void][CS2TerminalWindow]::SetHeight(530)
     } catch { } # Some terminal hosts manage their own window dimensions.
+    Start-TerminalView
 }
 function Show-Header($Title, [switch]$MainMenu) {
     if (-not [Console]::IsOutputRedirected) { try { $Host.UI.RawUI.WindowTitle = 'CS2 CONFIG - ' + $script:Pack.name } catch { } }
-    if (-not [Console]::IsOutputRedirected) { try { Clear-Host } catch { } }
+    if ($script:TerminalViewActive) { [CS2TerminalView]::Begin([string]$Title) }
+    elseif (-not [Console]::IsOutputRedirected) { try { Clear-Host } catch { } }
     if ($MainMenu) {
-        Write-Host 'CS2 CONFIG' -ForegroundColor Cyan
-        Write-Host ''
-        Write-Host ('Config name: ' + $script:Pack.name)
+        Write-TerminalText 'CS2 CONFIG' -ForegroundColor Cyan
+        Write-TerminalText ''
+        Write-TerminalText ('Config name: ' + $script:Pack.name)
     }
-    Write-Host ''
-    if ($Title) { Write-Host $Title -ForegroundColor White; Write-Host '' }
+    Write-TerminalText ''
+    if ($Title) { Write-TerminalText $Title -ForegroundColor White; Write-TerminalText '' }
 }
 function Read-Choice([int[]]$Allowed) {
     while ($true) {
-        Write-Host ''
-        $value=Read-Host 'Enter an option'
-        Write-Host ''
+        Write-TerminalText ''
+        $value=Read-TerminalLine 'Enter an option'
+        Write-TerminalText ''
         $number=-1
         if ([int]::TryParse($value,[ref]$number) -and $number -in $Allowed) { return $number }
-        Write-Host 'Enter one of the listed numbers.' -ForegroundColor Yellow
+        Write-TerminalText 'Enter one of the listed numbers.' -ForegroundColor Yellow
     }
 }
-function Wait-Back { Write-Host ''; [void](Read-Host 'Press Enter to go back') }
+function Wait-Back { Write-TerminalText ''; [void](Read-TerminalLine 'Press Enter to go back') }
 function Select-Profile($Purpose) {
     Show-Header ('Choose a profile to ' + $Purpose)
-    if (-not $script:Pack.profiles.Count) { Write-Host 'No profiles yet. Create a profile first.'; Wait-Back; return $null }
-    for ($i=0;$i -lt $script:Pack.profiles.Count;$i++) { Write-Host "  [$($i+1)] $($script:Pack.profiles[$i].name)" }
-    Write-Host '  [0] Back'
+    if (-not $script:Pack.profiles.Count) { Write-TerminalText 'No profiles yet. Create a profile first.'; Wait-Back; return $null }
+    for ($i=0;$i -lt $script:Pack.profiles.Count;$i++) { Write-TerminalText "  [$($i+1)] $($script:Pack.profiles[$i].name)" }
+    Write-TerminalText '  [0] Back'
     $index=Read-Choice (0..$script:Pack.profiles.Count)
     if ($index -eq 0) { return $null }
     return $script:Pack.profiles[$index-1]
@@ -808,14 +1020,14 @@ function Get-ProfileRows($Profile) {
     return ,$rows.ToArray()
 }
 function Show-Profile($Profile) {
-    Write-Host ('Profile: ' + $Profile.name)
+    Write-TerminalText ('Profile: ' + $Profile.name)
     # Preserve capture order without PowerShell 7-only Sort-Object -Stable.
     $rows=Get-ProfileRows $Profile
     foreach ($groupName in ($rows.Group | Select-Object -Unique)) {
-        Write-Host ''; Write-Host $groupName -ForegroundColor Cyan
+        Write-TerminalText ''; Write-TerminalText $groupName -ForegroundColor Cyan
         foreach ($row in $rows | Where-Object { $_.Group -eq $groupName }) {
-            if ($row.Name -eq 'Steam Launch Options') { Write-Host $row.Value }
-            else { Write-Host ('  {0,-39} {1}' -f $row.Name,$row.Value) }
+            if ($row.Name -eq 'Steam Launch Options') { Write-TerminalText $row.Value }
+            else { Write-TerminalText ('  {0,-39} {1}' -f $row.Name,$row.Value) }
         }
     }
 }
@@ -824,23 +1036,23 @@ function Show-Changes($Before,$After) {
     $count=0
     foreach ($row in (Get-ProfileRows $After)) {
         $key=$row.Group+'/'+$row.Name
-        if (-not $old.ContainsKey($key) -or $old[$key] -cne $row.Value) { Write-Host ('  {0}: {1} -> {2}' -f $row.Name,$old[$key],$row.Value); $count++ }
+        if (-not $old.ContainsKey($key) -or $old[$key] -cne $row.Value) { Write-TerminalText ('  {0}: {1} -> {2}' -f $row.Name,$old[$key],$row.Value); $count++ }
     }
     foreach ($section in @('user','machine','keys','gameFiles','video')) {
         if ((ConvertTo-Json -InputObject $Before[$section] -Depth 10 -Compress) -cne (ConvertTo-Json -InputObject $After[$section] -Depth 10 -Compress)) {
             $label=@{user='Player preferences';machine='Audio, HUD and radar';keys='Controls';gameFiles='Custom configs';video='Display and video'}[$section]
-            Write-Host "  $label includes updated settings."
+            Write-TerminalText "  $label includes updated settings."
             $count++
         }
     }
     return $count
 }
 function Show-Issues($Issues) {
-    foreach ($issue in $Issues) { Write-Host ("  {0}: {1} - {2}" -f $issue.Kind,$issue.Setting,$issue.Reason) -ForegroundColor Yellow }
+    foreach ($issue in $Issues) { Write-TerminalText ("  {0}: {1} - {2}" -f $issue.Kind,$issue.Setting,$issue.Reason) -ForegroundColor Yellow }
 }
 function Show-ClipboardResult([string]$Text) {
-    if (Copy-LaunchOptions $Text) { Write-Host 'Launch options copied to clipboard. Paste into Steam > CS2 > Properties > General > Launch Options.' }
-    else { Write-Host 'Could not copy launch options to clipboard. Use Copy launch options to retry or copy the line above manually.' -ForegroundColor Yellow }
+    if (Copy-LaunchOptions $Text) { Write-TerminalText 'Launch options copied to clipboard. Paste into Steam > CS2 > Properties > General > Launch Options.' }
+    else { Write-TerminalText 'Could not copy launch options to clipboard. Use Copy launch options to retry or copy the line above manually.' -ForegroundColor Yellow }
 }
 function Show-ApplyResult($Profile, $Plan, $Result) {
     $failed=@($Result.Issues | Where-Object {$_.Kind -eq 'Skipped'})
@@ -849,20 +1061,20 @@ function Show-ApplyResult($Profile, $Plan, $Result) {
         else { 'Profile {0} could not be applied' }
     Show-Header ($title -f $Profile.name)
     Show-Issues $Result.Issues
-    if ($Result.Issues.Count) { Write-Host '' }
-    Write-Host 'Launch options:'; Write-Host ''
+    if ($Result.Issues.Count) { Write-TerminalText '' }
+    Write-TerminalText 'Launch options:'; Write-TerminalText ''
     $launch=Get-EffectiveLaunchOptions $Profile $Plan
-    Write-Host $(if ($launch) {$launch} else {'(empty - clear the Launch Options field in Steam)'})
-    Write-Host ''
-    if (@($Result.Issues | Where-Object {$_.Setting -in @('Display','Refresh Rate')}).Count) { Write-Host 'Check any display parameters in this line before pasting.' -ForegroundColor Yellow; Write-Host '' }
+    Write-TerminalText $(if ($launch) {$launch} else {'(empty - clear the Launch Options field in Steam)'})
+    Write-TerminalText ''
+    if (@($Result.Issues | Where-Object {$_.Setting -in @('Display','Refresh Rate')}).Count) { Write-TerminalText 'Check any display parameters in this line before pasting.' -ForegroundColor Yellow; Write-TerminalText '' }
     if ($launch) { Show-ClipboardResult $launch }
     $actions=@()
     if ($failed.Count) { $actions+=@('Retry','Console alternative') }
     if ($launch) { $actions+='Copy launch options' }
     $actions+='Exit'
-    Write-Host ''
-    for ($i=0; $i -lt $actions.Count; $i++) { Write-Host ('  [{0}] {1}' -f ($i+1),$actions[$i]) }
-    Write-Host '  [0] Back to main menu'
+    Write-TerminalText ''
+    for ($i=0; $i -lt $actions.Count; $i++) { Write-TerminalText ('  [{0}] {1}' -f ($i+1),$actions[$i]) }
+    Write-TerminalText '  [0] Back to main menu'
     while ($true) {
         $choice=Read-Choice (0..$actions.Count)
         if ($choice -eq 0) { return 'Back' }
@@ -873,13 +1085,13 @@ function Show-ApplyResult($Profile, $Plan, $Result) {
 }
 function Show-Console($Profile) {
     Show-Header 'Console alternative'
-    Write-Host ('Profile: ' + $Profile.name)
+    Write-TerminalText ('Profile: ' + $Profile.name)
     $path=Join-Path $script:Root ('console\'+(Get-ConsoleFilename $Profile))
     Write-TextFile $path (Get-ConsoleCommands $Profile)
-    Write-Host "`n1. Open $path"
-    Write-Host '2. Copy its commands into the CS2 console in small batches and run them.'
-    Write-Host '3. Check your settings in CS2.'
-    Write-Host "`nSupported settings: crosshair, mouse, audio and controls."
+    Write-TerminalText "`n1. Open $path"
+    Write-TerminalText '2. Copy its commands into the CS2 console in small batches and run them.'
+    Write-TerminalText '3. Check your settings in CS2.'
+    Write-TerminalText "`nSupported settings: crosshair, mouse, audio and controls."
     Wait-Back
 }
 function Invoke-ApplyScreen {
@@ -889,9 +1101,9 @@ function Invoke-ApplyScreen {
     while ($true) {
         $plan=New-ApplyPlan $profile $context
         Show-Header 'Apply profile'; Show-Profile $profile
-        Write-Host ''; Show-Issues $plan.Video.Issues
+        Write-TerminalText ''; Show-Issues $plan.Video.Issues
         $label=if (@($plan.Video.Issues | Where-Object {$_.Kind -eq 'Skipped'}).Count) {'Apply available settings'} else {'Apply'}
-        Write-Host "`n  [1] $label"; Write-Host '  [0] Back'
+        Write-TerminalText "`n  [1] $label"; Write-TerminalText '  [0] Back'
         if ((Read-Choice @(0,1)) -eq 0) { continue ChooseProfile }
         $result=Invoke-ApplyPlan $plan
         switch (Show-ApplyResult $profile $plan $result) {
@@ -903,12 +1115,12 @@ function Invoke-ApplyScreen {
 }
 function Read-ProfileName {
     while ($true) {
-        $name=Read-Host 'Profile name (0 to go back)'
-        Write-Host ''
+        $name=Read-TerminalLine 'Profile name (0 to go back)'
+        Write-TerminalText ''
         if ($name -eq '0') { return '' }
         $name=$name.Trim()
-        if (-not $name -or $name.Length -gt 100 -or $name -match '[\x00-\x1f]') { Write-Host 'Enter a profile name (1-100 characters).'; Write-Host ''; continue }
-        if (@($script:Pack.profiles | Where-Object {$_.name -eq $name}).Count) { Write-Host 'A profile with this name already exists.'; Write-Host ''; continue }
+        if (-not $name -or $name.Length -gt 100 -or $name -match '[\x00-\x1f]') { Write-TerminalText 'Enter a profile name (1-100 characters).'; Write-TerminalText ''; continue }
+        if (@($script:Pack.profiles | Where-Object {$_.name -eq $name}).Count) { Write-TerminalText 'A profile with this name already exists.'; Write-TerminalText ''; continue }
         return $name
     }
 }
@@ -922,10 +1134,10 @@ function Export-WithRetry($Pack,$Destination,[switch]$Rename,$PreviousProfile=$n
                 try { $script:Pack=Read-Pack $Destination ''; $script:Root=$Destination } catch { }
             }
             Show-Header 'Config files could not all be updated'
-            Write-Host ('Folder: '+$Destination)
-            Write-Host ''
-            Write-Host 'Check folder permissions and close programs using these files, then retry.'
-            Write-Host "`n  [1] Retry"; Write-Host '  [0] Back to main menu'
+            Write-TerminalText ('Folder: '+$Destination)
+            Write-TerminalText ''
+            Write-TerminalText 'Check folder permissions and close programs using these files, then retry.'
+            Write-TerminalText "`n  [1] Retry"; Write-TerminalText '  [0] Back to main menu'
             if ((Read-Choice @(0,1)) -eq 0) { return $false }
         }
     }
@@ -940,19 +1152,19 @@ function Invoke-RenameScreen([switch]$Profile) {
         $kind='profile'; $currentName=$selected.name
     }
     Show-Header ('Rename ' + $kind)
-    Write-Host ('Current name: ' + $currentName)
-    Write-Host ''; Write-Host '  [0] Back'
+    Write-TerminalText ('Current name: ' + $currentName)
+    Write-TerminalText ''; Write-TerminalText '  [0] Back'
     while ($true) {
-        Write-Host ''
-        $name=(Read-Host ('New ' + $kind + ' name')).Trim()
-        Write-Host ''
+        Write-TerminalText ''
+        $name=(Read-TerminalLine ('New ' + $kind + ' name')).Trim()
+        Write-TerminalText ''
         if ($name -eq '0') { if ($Profile) { continue ChooseRename }; return }
         if (-not $name -or $name.Length -gt 100 -or $name -match '[\x00-\x1f\x7f]') {
-            Write-Host ('Enter a ' + $kind + ' name (1-100 characters).') -ForegroundColor Yellow
+            Write-TerminalText ('Enter a ' + $kind + ' name (1-100 characters).') -ForegroundColor Yellow
             continue
         }
         if ($Profile -and @($script:Pack.profiles | Where-Object {$_.id -ne $selected.id -and $_.name -eq $name}).Count) {
-            Write-Host 'A profile with this name already exists.' -ForegroundColor Yellow
+            Write-TerminalText 'A profile with this name already exists.' -ForegroundColor Yellow
             continue
         }
         $label=if ($Profile) {'Profile'} else {'Config'}
@@ -966,7 +1178,7 @@ function Invoke-RenameScreen([switch]$Profile) {
             $script:Pack=$next
             Show-Header ($label + ' renamed to ' + $name)
         }
-        Write-Host '  [0] Back to main menu'
+        Write-TerminalText '  [0] Back to main menu'
         [void](Read-Choice @(0))
         return
     }
@@ -984,30 +1196,30 @@ function Invoke-SaveScreen($Update) {
     if (-not (Test-Path -LiteralPath (Join-Path $destination 'profiles.json')) -and -not $script:Pack.profiles.Count) { $destination=Join-Path $destination 'cs2-config' }
     while ($true) {
         if ($Update) {
-            Show-Header 'Review profile changes'; Write-Host ('Profile: '+$name); Write-Host ''
+            Show-Header 'Review profile changes'; Write-TerminalText ('Profile: '+$name); Write-TerminalText ''
             $changes=Show-Changes $existing $profile
-            if (-not $changes) { Write-Host 'Profile is already up to date.'; Wait-Back; return }
-            Write-Host "`n  [1] Save changes"; Write-Host '  [2] View all settings'
+            if (-not $changes) { Write-TerminalText 'Profile is already up to date.'; Wait-Back; return }
+            Write-TerminalText "`n  [1] Save changes"; Write-TerminalText '  [2] View all settings'
         } else {
             Show-Header 'Review new profile'; Show-Profile $profile
-            Write-Host "`nSave to: $destination"
-            Write-Host ''
-            Write-Host '  [1] Create profile'; Write-Host '  [2] Change destination'
+            Write-TerminalText "`nSave to: $destination"
+            Write-TerminalText ''
+            Write-TerminalText '  [1] Create profile'; Write-TerminalText '  [2] Change destination'
         }
-        Write-Host '  [0] Back'
+        Write-TerminalText '  [0] Back'
         switch (Read-Choice @(0,1,2)) {
             0 { continue ChooseSource }
             2 {
                 if ($Update) { Show-Header 'Current settings on this PC'; Show-Profile $profile; Wait-Back }
                 else {
                     Show-Header 'Change destination'
-                    Write-Host ('Current folder: ' + $destination)
-                    Write-Host ''
-                    $path=(Read-Host 'Folder (0 to go back)').Trim().Trim('"')
-                    Write-Host ''
+                    Write-TerminalText ('Current folder: ' + $destination)
+                    Write-TerminalText ''
+                    $path=(Read-TerminalLine 'Folder (0 to go back)').Trim().Trim('"')
+                    Write-TerminalText ''
                     if ($path -ne '0' -and $path) {
                         $candidate=[IO.Path]::GetFullPath($path)
-                        if ($candidate -ne $script:Root -and (Test-Path -LiteralPath (Join-Path $candidate 'profiles.json'))) { Write-Host 'That folder already contains a config. Open its setup.cmd to add a profile.'; Wait-Back }
+                        if ($candidate -ne $script:Root -and (Test-Path -LiteralPath (Join-Path $candidate 'profiles.json'))) { Write-TerminalText 'That folder already contains a config. Open its setup.cmd to add a profile.'; Wait-Back }
                         else { $destination=$candidate }
                     }
                 }
@@ -1021,14 +1233,14 @@ function Invoke-SaveScreen($Update) {
                 if (-not (Export-WithRetry $next $destination)) { return }
                 $script:Pack=$next; $script:Root=$destination
                 Show-Header $(if ($Update) {'Profile updated'} else {'Profile created'})
-                Write-Host ('Profile: '+$name); Write-Host ('Folder: '+$destination)
-                Write-Host ''
-                Write-Host 'Open apply-config.cmd to apply a profile.'
-                Write-Host ''
-                Write-Host 'Open update-config.cmd to update it.'
-                Write-Host "`n  [1] Publishing instructions"; Write-Host '  [2] Exit'; Write-Host '  [0] Back to main menu'
+                Write-TerminalText ('Profile: '+$name); Write-TerminalText ('Folder: '+$destination)
+                Write-TerminalText ''
+                Write-TerminalText 'Open apply-config.cmd to apply a profile.'
+                Write-TerminalText ''
+                Write-TerminalText 'Open update-config.cmd to update it.'
+                Write-TerminalText "`n  [1] Publishing instructions"; Write-TerminalText '  [2] Exit'; Write-TerminalText '  [0] Back to main menu'
                 switch (Read-Choice @(0,1,2)) {
-                    1 { Show-Header 'Update your config on GitHub'; Write-Host '1. Open your config repository on GitHub.'; Write-Host '2. Choose Add file > Upload files.'; Write-Host '3. Upload the updated config folder contents.'; Write-Host '4. Choose Commit changes.'; Wait-Back }
+                    1 { Show-Header 'Update your config on GitHub'; Write-TerminalText '1. Open your config repository on GitHub.'; Write-TerminalText '2. Choose Add file > Upload files.'; Write-TerminalText '3. Upload the updated config folder contents.'; Write-TerminalText '4. Choose Commit changes.'; Wait-Back }
                     2 { $script:ExitRequested=$true }
                 }
                 return
@@ -1059,7 +1271,7 @@ function Start-ConfigTool($Mode,$Root,$Embedded) {
                 'rename-profile' { Invoke-RenameScreen -Profile }
                 default {
                     Show-Header '' -MainMenu
-                    Write-Host '  [1] Apply profile'; Write-Host '  [2] Update profile'; Write-Host '  [3] Create profile'; Write-Host '  [4] Rename config'; Write-Host '  [5] Rename profile'; Write-Host '  [0] Exit'
+                    Write-TerminalText '  [1] Apply profile'; Write-TerminalText '  [2] Update profile'; Write-TerminalText '  [3] Create profile'; Write-TerminalText '  [4] Rename config'; Write-TerminalText '  [5] Rename profile'; Write-TerminalText '  [0] Exit'
                     switch (Read-Choice @(0,1,2,3,4,5)) {
                         0 { $script:ExitRequested=$true }
                         1 { $Mode='apply' }; 2 { $Mode='update' }; 3 { $Mode='create' }
@@ -1069,7 +1281,7 @@ function Start-ConfigTool($Mode,$Root,$Embedded) {
                     continue MenuLoop
                 }
             }
-        } catch { Show-Header 'Could not continue'; Write-Host $_.Exception.Message -ForegroundColor Yellow; Wait-Back }
+        } catch { Show-Header 'Could not continue'; Write-TerminalText $_.Exception.Message -ForegroundColor Yellow; Wait-Back }
         $Mode='menu'
     }
 }
@@ -1077,4 +1289,5 @@ function Start-ConfigTool($Mode,$Root,$Embedded) {
 $script:CoreSource = [IO.File]::ReadAllText($PSCommandPath)
 $script:CoreSource = [regex]::Match($script:CoreSource,'(?ms)^# BEGIN CORE\r?\n(.*?)^# END CORE\r?$').Groups[1].Value.Trim()
 try { Start-ConfigTool $Mode $env:CS2_PACK_ROOT 'eyJzY2hlbWFWZXJzaW9uIjoxLCJuYW1lIjoiY3MyLWNvbmZpZy1vY2VhbnZpZXZ2IiwicHJvZmlsZXMiOlt7ImlkIjoiZDE4NWVkN2M4YWUyNDlkZTlhYWFjNmE4NmU5ZjEyMmMiLCJuYW1lIjoi0JTQvtC80LDRiNC90LjQuSIsInVwZGF0ZWRBdCI6IjIwMjYtMTAtMTBUMTQ6Mzc6NTIuMTQyMzU0NFoiLCJnYW1lRmlsZXMiOnsiYXV0b2V4ZWMuY2ZnIjoiLy8gQ1MyIHJ1bnMgdGhpcyBmaWxlIGF1dG9tYXRpY2FsbHkgb24gc3RhcnR1cC5cclxuLy8gSXQgc3RheXMgdGlueSBvbiBwdXJwb3NlIC0gaXQganVzdCBjaGFpbnMgdG8gdGhlIHJlYWwgY29uZmlnLFxyXG4vLyBzbyB0aGVyZSBpcyBvbmx5IG9uZSBwbGFjZSB0byBlZGl0LlxyXG5cclxuZXhlYyBvY2VhbnZpZXZ2XHJcblxyXG4vLyBGb3JjZSB0aGUgc2V0dGluZ3MgYWJvdmUgdG8gYmUgd3JpdHRlbiB0byBkaXNrIHNvIHRoZXkgc3Vydml2ZVxyXG4vLyB0aGUgbmV4dCB0aW1lIENTMiBzYXZlcyBpdHMgb3duIGNvbmZpZy5cclxuaG9zdF93cml0ZWNvbmZpZ1xyXG5cclxuLy8gLS0tLSBhZGRlZCBieSBjczItY29uZmlnIC0tLS1cclxuZXhlYyBjcm9zc2hhaXJcclxuaG9zdF93cml0ZWNvbmZpZ1xyXG4iLCJjcm9zc2hhaXIuY2ZnIjoiLy8gTWlncmF0ZWQgZnJvbSB0aGUgc2F2ZWQgcHJlLVNlcHRlbWJlci0yMDI2IGNyb3NzaGFpciBhdCAxNDQweDEwODAuXHJcbi8vIFBpeGVsIGRpbWVuc2lvbnMgYXJlIGEgY2FsY3VsYXRlZCBtYXRjaDsgY2hlY2sgdGhlIGFwcGVhcmFuY2UgaW4gQ1MyLlxyXG4vLyBDb2xvciBwcmVzZXQgNCB3YXMgY3lhbjsgdGhlIG9sZCBjdXN0b20gUkdCIHZhbHVlcyB3ZXJlIG5vdCBhY3RpdmUuXHJcblxyXG5jbF9jcm9zc2hhaXJzdHlsZSBcIjRcIlxyXG5jbF9jcm9zc2hhaXJfbGVuZ3RoIFwiNFwiXHJcbmNsX2Nyb3NzaGFpcl90aGlja25lc3MgXCIxXCJcclxuY2xfY3Jvc3NoYWlyX2dhcCBcIjJcIlxyXG5jbF9jcm9zc2hhaXJfZHJhd291dGxpbmUgXCIyXCJcclxuY2xfY3Jvc3NoYWlyb3V0bGluZV9yIFwiMFwiXHJcbmNsX2Nyb3NzaGFpcm91dGxpbmVfZyBcIjBcIlxyXG5jbF9jcm9zc2hhaXJvdXRsaW5lX2IgXCIwXCJcclxuY2xfY3Jvc3NoYWlyb3V0bGluZV9hIFwiMjU1XCJcclxuY2xfY3Jvc3NoYWlyX2R5bmFtaWNfbWF4ZGlzdF9zcGxpdHJhdGlvIFwiMC4zXCJcclxuY2xfY3Jvc3NoYWlyX2R5bmFtaWNfc3BsaXRhbHBoYV9pbm5lcm1vZCBcIjFcIlxyXG5jbF9jcm9zc2hhaXJfZHluYW1pY19zcGxpdGFscGhhX291dGVybW9kIFwiMC41XCJcclxuY2xfY3Jvc3NoYWlyX2R5bmFtaWNfc3BsaXRkaXN0IFwiN1wiXHJcbmNsX2Nyb3NzaGFpcl9yZWNvaWwgXCJmYWxzZVwiXHJcbmNsX2Nyb3NzaGFpcl9zbmlwZXJfd2lkdGggXCIxXCJcclxuY2xfY3Jvc3NoYWlyX3QgXCJmYWxzZVwiXHJcbmNsX2Nyb3NzaGFpcmNvbG9yX2EgXCIyNTVcIlxyXG5jbF9jcm9zc2hhaXJjb2xvcl9iIFwiMjUwXCJcclxuY2xfY3Jvc3NoYWlyY29sb3JfZyBcIjI1MFwiXHJcbmNsX2Nyb3NzaGFpcmNvbG9yX3IgXCI1MFwiXHJcbmNsX2Nyb3NzaGFpcmRvdCBcImZhbHNlXCJcclxuLy8gU2V0IGFmdGVyIHRoZSBzaXplIGNvbW1hbmRzOiBlZGl0aW5nIHNpemUgdXBkYXRlcyB0aGUgcmVmZXJlbmNlIGhlaWdodC5cclxuY2xfY3Jvc3NoYWlyX3NjcmVlbl9oZWlnaHQgXCIxMDgwXCJcclxuIiwia25pZmUuY2ZnIjoibXBfZHJvcF9rbmlmZV9lbmFibGUgdHJ1ZVxyXG5zdWJjbGFzc19jcmVhdGUgNTA4XHJcblxyXG5lY2hvIEtuaWZlIGRyb3BwZWRcclxuIiwib2NlYW52aWV2di5jZmciOiJiaW5kIFwibXdoZWVsdXBcIiBcInN3aXRjaGhhbmRzXCJcclxuYmluZCBcIm13aGVlbGRvd25cIiBcIitqdW1wXCJcclxuXHJcbmJpbmQgXCJzY2FuY29kZTg2XCIgXCJ2b2x1bWUgMC4wMVwiXHJcbmJpbmQgXCJzY2FuY29kZTg3XCIgXCJ2b2x1bWUgMC4yNVwiXHJcblxyXG5iaW5kIFwic2NhbmNvZGU4OVwiIFwiYnV5IHZlc3RoZWxtOyBidXkgdmVzdFwiXHJcbmJpbmQgXCJzY2FuY29kZTkwXCIgXCJidXkgYWs0NzsgYnV5IG00YTFfc2lsZW5jZXJcIlxyXG5iaW5kIFwic2NhbmNvZGU5MVwiIFwiYnV5IGRlZnVzZXJcIlxyXG5iaW5kIFwic2NhbmNvZGU5MlwiIFwiYnV5IGF3cFwiXHJcbmJpbmQgXCJzY2FuY29kZTkzXCIgXCJidXkgZGVhZ2xlXCJcclxuYmluZCBcInNjYW5jb2RlOTRcIiBcImJ1eSBtb2xvdG92OyBidXkgaW5jZ3JlbmFkZVwiXHJcbmJpbmQgXCJzY2FuY29kZTk1XCIgXCJidXkgc21va2VncmVuYWRlXCJcclxuYmluZCBcInNjYW5jb2RlOTZcIiBcImJ1eSBmbGFzaGJhbmdcIlxyXG5iaW5kIFwic2NhbmNvZGU5N1wiIFwiYnV5IGhlZ3JlbmFkZVwiXHJcblxyXG5iaW5kIFwibW91c2U0XCIgXCJzbG90N1wiXHJcbmJpbmQgXCJtb3VzZTVcIiBcInNsb3Q4XCJcclxuXHJcbmJpbmQgXCJzY2FuY29kZTY1XCIgXCJleGVjIHRyYWluaW5nXCJcclxuYmluZCBcInNjYW5jb2RlNjZcIiBcImV4ZWMga25pZmVcIlxyXG5cclxudm9sdW1lIFwiMC4xXCJcclxuYmluZCBcInNjYW5jb2RlMjI2XCIgXCIrdm9pY2VyZWNvcmRcIlxyXG5cclxuYmluZCBcInpcIiBcInJhZGlvMVwiXHJcbmJpbmQgXCJ4XCIgXCJyYWRpbzJcIlxyXG5iaW5kIFwiY1wiIFwicmFkaW8zXCJcclxuXHJcbnNlbnNpdGl2aXR5IFwiMi4yXCJcclxuem9vbV9zZW5zaXRpdml0eV9yYXRpbyBcIjEuMFwiXHJcblxyXG52aWV3bW9kZWxfZm92IDY4OyBcclxudmlld21vZGVsX29mZnNldF94IDIuNVxyXG52aWV3bW9kZWxfb2Zmc2V0X3kgMFxyXG52aWV3bW9kZWxfb2Zmc2V0X3ogLTEuNVxyXG52aWV3bW9kZWxfcHJlc2V0cG9zIDNcclxuXHJcbmVjaG8gQ29uZmlnIGxvYWRlZFxyXG4iLCJ0cmFpbmluZy5jZmciOiIvLyBHZW5lcmFsXHJcbmJvdF9raWNrXHJcbm1wX3dhcm11cF9lbmRcclxuc3ZfY2hlYXRzIHRydWVcclxubXBfbGltaXR0ZWFtcyAwXHJcbm1wX2F1dG90ZWFtYmFsYW5jZSAwXHJcblxyXG4vLyBFY29ub215XHJcbm1wX21heG1vbmV5IDYwMDAwXHJcbm1wX3N0YXJ0bW9uZXkgNjAwMDBcclxubXBfYnV5dGltZSA5OTk5XHJcbm1wX2J1eV9hbnl3aGVyZSAxXHJcblxyXG4vLyBSb3VuZCBzZXR0aW5nc1xyXG5tcF9mcmVlemV0aW1lIDBcclxubXBfcm91bmR0aW1lIDYwXHJcbm1wX3JvdW5kdGltZV9kZWZ1c2UgNjBcclxubXBfcmVzdGFydGdhbWUgMVxyXG5cclxuLy8gUmVzcGF3blxyXG5tcF9yZXNwYXduX29uX2RlYXRoX2N0IDFcclxubXBfcmVzcGF3bl9vbl9kZWF0aF90IDFcclxuXHJcbi8vIFByYWN0aWNlIC8gdmlzdWFsc1xyXG5zdl9pbmZpbml0ZV9hbW1vIDFcclxuc3Zfc2hvd2ltcGFjdHMgMVxyXG5zdl9zaG93aW1wYWN0c190aW1lIDEwXHJcbmFtbW9fZ3JlbmFkZV9saW1pdF90b3RhbCA1XHJcbnN2X2dyZW5hZGVfdHJhamVjdG9yeV9wcmFjX3BpcHJldmlldyAxXHJcblxyXG4vLyBCaW5kc1xyXG5iaW5kIGFsdCBcIm5vY2xpcFwiXHJcbmJpbmQgXCJDQVBTTE9DS1wiIFwic3ZfcmV0aHJvd19sYXN0X2dyZW5hZGVcIlxyXG5iaW5kIFwiTU9VU0UzXCIgXCJlbnRfZmlyZSBzbW9rZWdyZW5hZGVfcHJvamVjdGlsZSBraWxsOyBlbnRfZmlyZSBtb2xvdG92X3Byb2plY3RpbGUga2lsbDsgZW50X2ZpcmUgZmxhc2hiYW5nX3Byb2plY3RpbGUga2lsbDsgZW50X2ZpcmUgaGVncmVuYWRlX3Byb2plY3RpbGUga2lsbDsgZW50X2ZpcmUgZGVjb3lfcHJvamVjdGlsZSBraWxsOyBlbnRfZmlyZSBpbmZlcm5vIGtpbGw7IHN0b3Bzb3VuZFwiXHJcblxyXG5lY2hvIFRyYWluaW5nIG1vZGUgYWN0aXZhdGVkXHJcbiJ9LCJ1c2VyIjp7ImNsX2J1eW1lbnVfY3RfbmV4dHJvdW5kX2hpZ2giOiI1MDAwIiwiY2xfYnV5bWVudV9jdF9uZXh0cm91bmRfbG93IjoiMTQwMCIsImNsX2J1eW1lbnVfdF9uZXh0cm91bmRfaGlnaCI6IjUwMDAiLCJjbF9idXltZW51X3RfbmV4dHJvdW5kX2xvdyI6IjE0MDAiLCJjbF9idXl3aGVlbF9kb25hdGVfa2V5IjoiMCIsImNsX2J1eXdoZWVsX25vbnVtYmVycHVyY2hhc2luZyI6ImZhbHNlIiwiY2xfZGVib3VuY2Vfem9vbSI6InRydWUiLCJjbF9ncmVuYWRlY3Jvc3NoYWlyX2RlY295IjoidHJ1ZSIsImNsX2dyZW5hZGVjcm9zc2hhaXJfZXhwbG9zaXZlIjoidHJ1ZSIsImNsX2dyZW5hZGVjcm9zc2hhaXJfZmlyZSI6InRydWUiLCJjbF9ncmVuYWRlY3Jvc3NoYWlyX2ZsYXNoIjoidHJ1ZSIsImNsX2dyZW5hZGVjcm9zc2hhaXJfa2VlcHVzZXJjcm9zc2hhaXIiOiJ0cnVlIiwiY2xfZ3JlbmFkZWNyb3NzaGFpcl9zbW9rZSI6InRydWUiLCJjbF9ncmVuYWRlY3Jvc3NoYWlyZGVsYXlfZGVjb3kiOiIyIiwiY2xfZ3JlbmFkZWNyb3NzaGFpcmRlbGF5X2V4cGxvc2l2ZSI6IjIiLCJjbF9ncmVuYWRlY3Jvc3NoYWlyZGVsYXlfZmlyZSI6IjIiLCJjbF9ncmVuYWRlY3Jvc3NoYWlyZGVsYXlfZmxhc2giOiIyIiwiY2xfZ3JlbmFkZWNyb3NzaGFpcmRlbGF5X3Ntb2tlIjoiMiIsImNsX2ludmVudG9yeV9yYWRpYWxfaW1tZWRpYXRlX3NlbGVjdCI6InRydWUiLCJjbF9pbnZlbnRvcnlfcmFkaWFsX3RhcF90b19jeWNsZSI6InRydWUiLCJjbF9pcm9uc2lnaHRfZG90X3NjYWxlIjoiMSIsImNsX2lyb25zaWdodF91c2Vjcm9zc2hhaXJjb2xvciI6ImZhbHNlIiwiY2xfcHJlZmVyX2xlZnRoYW5kZWQiOiJmYWxzZSIsImNsX3Nob3dsb2Fkb3V0IjoidHJ1ZSIsImNsX3NpbGVuY2VyX21vZGUiOiIwIiwiY2xfc25pcGVyX2F1dG9fcmV6b29tIjoidHJ1ZSIsImNsX3VzZV9vcGVuc19idXlfbWVudSI6ImZhbHNlIiwiY29uX2VuYWJsZSI6InRydWUiLCJjcm9zc2hhaXIiOiJ0cnVlIiwiaHVkX3Nob3d0YXJnZXRpZCI6InRydWUiLCJpbnB1dF9idXR0b25fY29kZV9pc19zY2FuX2NvZGVfc2NkIjoidHJ1ZSIsImpveV9heGlzcl9kZWFkem9uZSI6IjAuMTUiLCJqb3lfYXhpc3JfcmVsYXRpdmUiOiJmYWxzZSIsImpveV9heGlzdV9kZWFkem9uZSI6IjAuMTUiLCJqb3lfYXhpc3VfcmVsYXRpdmUiOiJmYWxzZSIsImpveV9heGlzdl9kZWFkem9uZSI6IjAuMTUiLCJqb3lfYXhpc3ZfcmVsYXRpdmUiOiJmYWxzZSIsImpveV9heGlzeF9kZWFkem9uZSI6IjAuMTUiLCJqb3lfYXhpc3hfcmVsYXRpdmUiOiJmYWxzZSIsImpveV9heGlzeV9kZWFkem9uZSI6IjAuMTUiLCJqb3lfYXhpc3lfcmVsYXRpdmUiOiJmYWxzZSIsImpveV9heGlzel9kZWFkem9uZSI6IjAuMTUiLCJqb3lfYXhpc3pfcmVsYXRpdmUiOiJmYWxzZSIsImpveV9jaXJjbGVfY29ycmVjdF9tb2RlIjoiMSIsImpveV9jaXJjbGVfY29ycmVjdF9tb2RlX3ZlaGljbGUiOiIyIiwiam95X2ZvcndhcmRfc2Vuc2l0aXZpdHkiOiIxIiwiam95X21vdmVtZW50X3N0aWNrIjoiZmFsc2UiLCJqb3lfcGl0Y2hfc2Vuc2l0aXZpdHkiOiIzIiwiam95X3BpdGNoc2Vuc2l0aXZpdHkiOiIxIiwiam95X3Jlc3BvbnNlX2xvb2siOiIwIiwiam95X3Jlc3BvbnNlX21vdmUiOiI5Iiwiam95X3NpZGVfc2Vuc2l0aXZpdHkiOiIxIiwiam95X3lhd19zZW5zaXRpdml0eSI6IjMiLCJqb3lfeWF3c2Vuc2l0aXZpdHkiOiItMSIsIm1fcGl0Y2giOiIwLjAyMiIsIm1feWF3IjoiMC4wMjIiLCJvcHRpb25fZHVja19tZXRob2QiOiJmYWxzZSIsIm9wdGlvbl9zcGVlZF9tZXRob2QiOiJmYWxzZSIsInBsYXllcl9uZXZlcnNob3dfY29tbXVuaXR5c2VydmVybWVzc2FnZSI6IjEiLCJzZW5zaXRpdml0eSI6IjIuMiIsInNlbnNpdGl2aXR5X3lfc2NhbGUiOiIxIiwidmlld21vZGVsX2ZvdiI6IjY4Iiwidmlld21vZGVsX29mZnNldF94IjoiMi41Iiwidmlld21vZGVsX29mZnNldF95IjoiMCIsInZpZXdtb2RlbF9vZmZzZXRfeiI6Ii0xLjUiLCJ2b2ljZV92b3giOiIwIiwiem9vbV9zZW5zaXRpdml0eV9yYXRpbyI6IjEiLCJjbF9jcm9zc2hhaXJzdHlsZSI6IjQiLCJjbF9jcm9zc2hhaXJfbGVuZ3RoIjoiNCIsImNsX2Nyb3NzaGFpcl90aGlja25lc3MiOiIxIiwiY2xfY3Jvc3NoYWlyX2dhcCI6IjIiLCJjbF9jcm9zc2hhaXJfZHJhd291dGxpbmUiOiIyIiwiY2xfY3Jvc3NoYWlyb3V0bGluZV9yIjoiMCIsImNsX2Nyb3NzaGFpcm91dGxpbmVfZyI6IjAiLCJjbF9jcm9zc2hhaXJvdXRsaW5lX2IiOiIwIiwiY2xfY3Jvc3NoYWlyb3V0bGluZV9hIjoiMjU1IiwiY2xfY3Jvc3NoYWlyX2R5bmFtaWNfbWF4ZGlzdF9zcGxpdHJhdGlvIjoiMC4zIiwiY2xfY3Jvc3NoYWlyX2R5bmFtaWNfc3BsaXRhbHBoYV9pbm5lcm1vZCI6IjEiLCJjbF9jcm9zc2hhaXJfZHluYW1pY19zcGxpdGFscGhhX291dGVybW9kIjoiMC41IiwiY2xfY3Jvc3NoYWlyX2R5bmFtaWNfc3BsaXRkaXN0IjoiNyIsImNsX2Nyb3NzaGFpcl9yZWNvaWwiOiJmYWxzZSIsImNsX2Nyb3NzaGFpcl9zbmlwZXJfd2lkdGgiOiIxIiwiY2xfY3Jvc3NoYWlyX3QiOiJmYWxzZSIsImNsX2Nyb3NzaGFpcmNvbG9yX2EiOiIyNTUiLCJjbF9jcm9zc2hhaXJjb2xvcl9iIjoiMjUwIiwiY2xfY3Jvc3NoYWlyY29sb3JfZyI6IjI1MCIsImNsX2Nyb3NzaGFpcmNvbG9yX3IiOiI1MCIsImNsX2Nyb3NzaGFpcmRvdCI6ImZhbHNlIiwiY2xfY3Jvc3NoYWlyX3NjcmVlbl9oZWlnaHQiOiIxMDgwIn0sImtleXMiOnsidiI6Ijx1bmJvdW5kPiIsIktQXzEiOiJidXkgdmVzdGhlbG07IGJ1eSB2ZXN0IiwiS1BfMiI6ImJ1eSBhazQ3OyBidXkgbTRhMV9zaWxlbmNlciIsIktQXzMiOiJidXkgZGVmdXNlciIsIktQXzQiOiJidXkgYXdwIiwiS1BfNSI6ImJ1eSBkZWFnbGUiLCJLUF82IjoiYnV5IG1vbG90b3Y7IGJ1eSBpbmNncmVuYWRlIiwiS1BfNyI6ImJ1eSBzbW9rZWdyZW5hZGUiLCJLUF84IjoiYnV5IGZsYXNoYmFuZyIsIktQXzkiOiJidXkgaGVncmVuYWRlIiwiS1BfTUlOVVMiOiJ2b2x1bWUgMC4wMSIsIktQX1BMVVMiOiJ2b2x1bWUgMC4yNSIsIkFMVCI6Iit2b2ljZXJlY29yZCIsIkY3IjoiZXhlYyBvY2VhbnZpZXZ2IiwiRjgiOiJleGVjIHRyYWluaW5nIiwiRjkiOiJleGVjIGtuaWZlIiwiTU9VU0U0Ijoic2xvdDciLCJNT1VTRTUiOiJzbG90OCIsIk1XSEVFTFVQIjoic3dpdGNoaGFuZHMiLCJNV0hFRUxET1dOIjoiK2p1bXAiLCJjIjoicmFkaW8zIiwieCI6InJhZGlvMiIsImAiOiJ0b2dnbGVjb25zb2xlIiwiRU5URVIiOiJlbnRfZmlyZV9vdXRwdXQgc2NyaXB0IE9uVXNlcjEgS2V5SW5wdXQsRW50ZXIiLCJCQUNLU1BBQ0UiOiJlbnRfZmlyZV9vdXRwdXQgc2NyaXB0IE9uVXNlcjEgS2V5SW5wdXQsQmFja3NwYWNlIiwiREVMIjoibXV0ZSIsIk1PVVNFMyI6ImVudF9maXJlIHNtb2tlZ3JlbmFkZV9wcm9qZWN0aWxlIGtpbGw7IGVudF9maXJlIG1vbG90b3ZfcHJvamVjdGlsZSBraWxsOyBlbnRfZmlyZSBmbGFzaGJhbmdfcHJvamVjdGlsZSBraWxsOyBlbnRfZmlyZSBoZWdyZW5hZGVfcHJvamVjdGlsZSBraWxsOyBlbnRfZmlyZSBkZWNveV9wcm9qZWN0aWxlIGtpbGw7IGVudF9maXJlIGluZmVybm8ga2lsbDsgc3RvcHNvdW5kIiwieiI6InJhZGlvMSIsImkiOiJkZW1vX3RvZ2dsZXBhdXNlIiwiaiI6ImRlbW9fZ290byAtMzIwIHJlbGF0aXZlIiwibyI6InRvZ2dsZSBzcGVjX3Nob3dfeHJheSIsIktQX01VTFRJUExZIjoiZGVtb190aW1lc2NhbGUgMC4yNSIsIk1PVVNFMSI6IithdHRhY2siLCJUQUIiOiIrc2hvd3Njb3JlcyIsIjAiOiJzbG90MTAiLCIxIjoic2xvdDEiLCIyIjoic2xvdDIiLCIzIjoic2xvdDMiLCI0Ijoic2xvdDQiLCI1Ijoic2xvdDUiLCI2Ijoic2xvdDYiLCI3Ijoic2xvdDciLCI4Ijoic2xvdDgiLCI5Ijoic2xvdDkiLCJhIjoiK2xlZnQiLCJiIjoiYnV5bWVudSIsImQiOiIrcmlnaHQiLCJlIjoiK3VzZSIsImYiOiIrbG9va2F0d2VhcG9uIiwiZyI6ImRyb3AiLCJsIjoibGVmdGhhbmQxIiwibSI6InRlYW1tZW51IiwibiI6Im5vY2xpcCIsInEiOiJsYXN0aW52IiwiciI6IityZWxvYWQiLCJzIjoiK2JhY2siLCJ1IjoibWVzc2FnZW1vZGUyIiwidyI6Iitmb3J3YXJkIiwieSI6Im1lc3NhZ2Vtb2RlIiwiWyI6ImRlbW9fdGltZXNjYWxlIDEiLCJdIjoiZGVtb190aW1lc2NhbGUgMTAiLCIvIjoiZW50X2ZpcmUgc21va2VncmVuYWRlX3Byb2plY3RpbGUga2lsbCIsIlNQQUNFIjoiK2p1bXAiLCJFU0NBUEUiOiJjYW5jZWxzZWxlY3QiLCJQQVVTRSI6InBhdXNlIiwiU0hJRlQiOiIrc3ByaW50IiwiQ1RSTCI6IitkdWNrIiwiVVBBUlJPVyI6ImRlbW9fcGF1c2UiLCJET1dOQVJST1ciOiJkZW1vX3Jlc3VtZSIsIkYyIjoicmVidXkiLCJNT1VTRTIiOiIrYXR0YWNrMiIsIkNBUFNMT0NLIjoic3ZfcmV0aHJvd19sYXN0X2dyZW5hZGUifSwibWFjaGluZSI6eyJjbF9hbGxvd19hbmltYXRlZF9hdmF0YXJzIjoidHJ1ZSIsImNsX2F1dG9oZWxwIjoidHJ1ZSIsImNsX2NvbG9yIjoiMyIsImNsX2Nyb3NzaGFpcl9mcmllbmRseV93YXJuaW5nIjoiMCIsImNsX2RlYXRoY2FtcGFuZWxfcG9zaXRpb25fZHluYW1pYyI6IjEiLCJjbF9kaXNhYmxlX3JvdW5kX2VuZF9yZXBvcnQiOiJmYWxzZSIsImNsX2RtX2J1eXJhbmRvbXdlYXBvbnMiOiJ0cnVlIiwiY2xfZW5hYmxlX3BhcnR5X3ZvaWNlIjoidHJ1ZSIsImNsX2ZvcmNlX3NwZWNfaHVkX2NvbG9yX3RvX3RlYW0kMSI6InRydWUiLCJjbF9oaWRlX2F2YXRhcl9pbWFnZXMiOiIwIiwiY2xfaHVkX2NvbG9yIjoiMCIsImNsX2h1ZF9yYWRhcl9iYWNrZ3JvdW5kX2FscGhhIjoiMC42MjciLCJjbF9odWRfcmFkYXJfYmx1cl9iYWNrZ3JvdW5kIjoidHJ1ZSIsImNsX2h1ZF9yYWRhcl9tYXBfYWRkaXRpdmUiOiJ0cnVlIiwiY2xfaHVkX3JhZGFyX3NjYWxlIjoiMC45MDM3MjYiLCJjbF9odWRfdGVsZW1ldHJ5X2ZyYW1ldGltZV9wb29yIjoiMTAwIiwiY2xfaHVkX3RlbGVtZXRyeV9mcmFtZXRpbWVfc2hvdyI6IjEiLCJjbF9odWRfdGVsZW1ldHJ5X25ldF9kZXRhaWxlZCI6IjAiLCJjbF9odWRfdGVsZW1ldHJ5X25ldF9taXNkZWxpdmVyeV9wb29yIjoiNSIsImNsX2h1ZF90ZWxlbWV0cnlfbmV0X21pc2RlbGl2ZXJ5X3Nob3ciOiIxIiwiY2xfaHVkX3RlbGVtZXRyeV9uZXRfcXVhbGl0eV9ncmFwaF9zaG93IjoiMCIsImNsX2h1ZF90ZWxlbWV0cnlfcGluZ19wb29yIjoiMTAwIiwiY2xfaHVkX3RlbGVtZXRyeV9waW5nX3Nob3ciOiIxIiwiY2xfaHVkX3RlbGVtZXRyeV9zZXJ2ZXJyZWN2bWFyZ2luX2dyYXBoX3Nob3ciOiIwIiwiY2xfbXV0ZV9hbGxfYnV0X2ZyaWVuZHNfYW5kX3BhcnR5IjoiMCIsImNsX211dGVfZW5lbXlfdGVhbSI6ImZhbHNlIiwiY2xfbmV0X2J1ZmZlcl90aWNrcyI6IjAiLCJjbF9vYnNlcnZlZF9ib3RfY3Jvc3NoYWlyIjoiMiIsImNsX3BpbmdfZmFkZV9kZWFkem9uZSI6IjYwIiwiY2xfcGluZ19mYWRlX2Rpc3RhbmNlIjoiMzAwIiwiY2xfcGxheWVyX3BpbmdfbXV0ZSI6IjAiLCJjbF9wcmVkaWN0X2JvZHlfc2hvdF9meCI6ImZhbHNlIiwiY2xfcHJlZGljdF9oZWFkX3Nob3RfZngiOiJmYWxzZSIsImNsX3ByZWRpY3Rfa2lsbF9yYWdkb2xscyI6ImZhbHNlIiwiY2xfcXVpY2tpbnZlbnRvcnlfZmlsZW5hbWUiOiJyYWRpYWxfcXVpY2tpbnZlbnRvcnkudHh0IiwiY2xfcXVpY2tpbnZlbnRvcnlfbGFzdGludiI6InRydWUiLCJjbF9xdWlja2ludmVudG9yeV9saW5lX3VwZGF0ZV9zcGVlZCI6IjY1IiwiY2xfcmFkYXJfYWx3YXlzX2NlbnRlcmVkIjoidHJ1ZSIsImNsX3JhZGFyX2ljb25fc2NhbGVfbWluIjoiMC42IiwiY2xfcmFkYXJfcm90YXRlIjoidHJ1ZSIsImNsX3JhZGFyX3NjYWxlIjoiMC45NjA2MTUiLCJjbF9yYWRhcl9zY2FsZV9hbHRlcm5hdGUkMiI6IjAuOTYzMzA3IiwiY2xfcmFkYXJfc2NhbGVfZHluYW1pYyI6ImZhbHNlIiwiY2xfcmFkYXJfc2hvd19hbGxfcGxheWVyc193aGVuX3NwZWN0YXRpbmciOiJ0cnVlIiwiY2xfcmFkYXJfc3F1YXJlX2Fsd2F5cyI6InRydWUiLCJjbF9yYWRhcl9zcXVhcmVfd2hlbl9zcGVjdGF0aW5nIjoidHJ1ZSIsImNsX3JhZGFyX3NxdWFyZV93aXRoX3Njb3JlYm9hcmQiOiJmYWxzZSIsImNsX3JhZGlhbF9yYWRpb190YWJfMF90ZXh0XzEiOiIjQ2hhdHdoZWVsX3JlcXVlc3RzcGVuZCIsImNsX3JhZGlhbF9yYWRpb190YWJfMF90ZXh0XzIiOiIjQ2hhdHdoZWVsX3JlcXVlc3R3ZWFwb24iLCJjbF9yYWRpYWxfcmFkaW9fdGFiXzBfdGV4dF8zIjoiI0NoYXR3aGVlbF9icGxhbiIsImNsX3JhZGlhbF9yYWRpb190YWJfMF90ZXh0XzQiOiIjQ2hhdHdoZWVsX2ZvbGxvd2luZ3lvdSIsImNsX3JhZGlhbF9yYWRpb190YWJfMF90ZXh0XzUiOiIjQ2hhdHdoZWVsX21pZHBsYW4iLCJjbF9yYWRpYWxfcmFkaW9fdGFiXzBfdGV4dF82IjoiI0NoYXR3aGVlbF9mb2xsb3dtZSIsImNsX3JhZGlhbF9yYWRpb190YWJfMF90ZXh0XzciOiIjQ2hhdHdoZWVsX2FwbGFuIiwiY2xfcmFkaWFsX3JhZGlvX3RhYl8wX3RleHRfOCI6IiNDaGF0d2hlZWxfcmVxdWVzdGVjb3JvdW5kIiwiY2xfcmFkaWFsX3JhZGlvX3RhYl8xX3RleHRfMSI6IiNDaGF0d2hlZWxfZW5lbXlzcG90dGVkIiwiY2xfcmFkaWFsX3JhZGlvX3RhYl8xX3RleHRfMiI6IiNDaGF0d2hlZWxfbmVlZGJhY2t1cCIsImNsX3JhZGlhbF9yYWRpb190YWJfMV90ZXh0XzMiOiIjQ2hhdHdoZWVsX2JwbGFuIiwiY2xfcmFkaWFsX3JhZGlvX3RhYl8xX3RleHRfNCI6IiNDaGF0d2hlZWxfYm9tYmNhcnJpZXJzcG90dGVkIiwiY2xfcmFkaWFsX3JhZGlvX3RhYl8xX3RleHRfNSI6IiNDaGF0d2hlZWxfbXVsdGlwbGVlbmVtaWVzaGVyZSIsImNsX3JhZGlhbF9yYWRpb190YWJfMV90ZXh0XzYiOiIjQ2hhdHdoZWVsX3NuaXBlcnNwb3R0ZWQiLCJjbF9yYWRpYWxfcmFkaW9fdGFiXzFfdGV4dF83IjoiI0NoYXR3aGVlbF9hcGxhbiIsImNsX3JhZGlhbF9yYWRpb190YWJfMV90ZXh0XzgiOiIjQ2hhdHdoZWVsX2lucG9zaXRpb24iLCJjbF9yYWRpYWxfcmFkaW9fdGFiXzJfdGV4dF8xIjoiI0NoYXR3aGVlbF9hZmZpcm1hdGl2ZSIsImNsX3JhZGlhbF9yYWRpb190YWJfMl90ZXh0XzIiOiIjQ2hhdHdoZWVsX25lZ2F0aXZlIiwiY2xfcmFkaWFsX3JhZGlvX3RhYl8yX3RleHRfMyI6IiNDaGF0d2hlZWxfY29tcGxpbWVudCIsImNsX3JhZGlhbF9yYWRpb190YWJfMl90ZXh0XzQiOiIjQ2hhdHdoZWVsX3RoYW5rcyIsImNsX3JhZGlhbF9yYWRpb190YWJfMl90ZXh0XzUiOiIjQ2hhdHdoZWVsX2NoZWVyIiwiY2xfcmFkaWFsX3JhZGlvX3RhYl8yX3RleHRfNiI6IiNDaGF0d2hlZWxfcGVwdGFsayIsImNsX3JhZGlhbF9yYWRpb190YWJfMl90ZXh0XzciOiIjQ2hhdHdoZWVsX3NvcnJ5IiwiY2xfcmFkaWFsX3JhZGlvX3RhYl8yX3RleHRfOCI6IiNDaGF0d2hlZWxfc2VjdG9yY2xlYXIiLCJjbF9yYWRpYWxfcmFkaW9fdGFwX3RvX3BpbmciOiJ0cnVlIiwiY2xfcmFkaWFsX3JhZGlvX3ZlcnNpb25fcmVzZXQiOiIxMiIsImNsX3Nhbml0aXplX3BsYXllcl9uYW1lcyI6ImZhbHNlIiwiY2xfc2NvcmVib2FyZF9tb3VzZV9lbmFibGVfYmluZGluZyI6IithdHRhY2syIiwiY2xfc2NvcmVib2FyZF9zdXJ2aXZvcnNfYWx3YXlzX29uIjoiZmFsc2UiLCJjbF9zaG93X2NsYW5faW5fZGVhdGhfbm90aWNlIjoidHJ1ZSIsImNsX3Nob3dfb2JzZXJ2ZXJfY3Jvc3NoYWlyIjoiMiIsImNsX3NuaXBlcl9kZWxheV91bnNjb3BlIjoiZmFsc2UiLCJjbF9zbmlwZXJfc2hvd19pbmFjY3VyYWN5IjoidHJ1ZSIsImNsX3RlYW1pZF9vdmVyaGVhZF9jb2xvcnNfc2hvdyQyIjoidHJ1ZSIsImNsX3RlYW1pZF9vdmVyaGVhZF9mYWRlX25lYXJfY3Jvc3NoYWlyIjoiMC41IiwiY2xfdGVhbWlkX292ZXJoZWFkX21vZGUkMiI6IjMiLCJjbF90ZWFtbWF0ZV9jb2xvcnNfc2hvdyI6IjEiLCJjbF90aW1lb3V0IjoiMzAiLCJjbF91c2VfbGFzdF9zZWxlY3RlZF93ZWFwb25fc2xvdF9wb3NpdGlvbiI6ImZhbHNlIiwiY2xfdmVyc3VzX2ludHJvIjoidHJ1ZSIsImNsX3dlYXBvbl9zZWxlY3Rpb25fcmFyaXR5X2NvbG9yIjoiZmFsc2UiLCJjbG9zZWNhcHRpb24iOiJmYWxzZSIsImNzZ29fbWFwX3ByZXZpZXdfc2NhbGUiOiI0LjI3NDgzNiIsImRzcF92b2x1bWUiOiIwLjgiLCJmb3ZfZGVzaXJlZCI6Ijc1IiwiZnBzX21heCI6IjAiLCJmcHNfbWF4X3VpJDIiOiIyMDAiLCJodWRfZmFzdHN3aXRjaCI6IjAiLCJodWRfc2NhbGluZyQzIjoiMSIsIm1hcG92ZXJ2aWV3X2ljb25fc2NhbGUiOiIxIiwibW91c2VfaW52ZXJ0eSI6ImZhbHNlIiwicl9kcmF3dHJhY2Vyc19maXJzdHBlcnNvbiI6InRydWUiLCJyX2Z1bGxzY3JlZW5fZ2FtbWEiOiIyLjIiLCJyX2ljb25faW1hZ2VfY2FjaGVfdG9fZGlzayI6InRydWUiLCJyX3BsYXllcl92aXNpYmlsaXR5X21vZGUiOiIxIiwicl9zaG93X2J1aWxkX2luZm8iOiJ0cnVlIiwicl9zcGVjdGF0b3JfZmxhc2hiYW5nX29wYWNpdHkiOiIwLjYiLCJyYXRlIjoiNzg2NDMyIiwic2FmZXpvbmV4IjoiMSIsInNhZmV6b25leSI6IjEiLCJzbmRfYXV0b2RldGVjdF9sYXRlbmN5IjoidHJ1ZSIsInNuZF9kZWF0aGNhbWVyYV92b2x1bWUkNCI6IjAuMTYiLCJzbmRfZHVja2VyYXR0YWNrdGltZSI6IjAuNSIsInNuZF9kdWNrZXJyZWxlYXNldGltZSI6IjIuNSIsInNuZF9kdWNrZXJ0aHJlc2hvbGQiOiIwLjE1Iiwic25kX2R1Y2t0b3ZvbHVtZSI6IjAuNTUiLCJzbmRfZ2FpbiI6IjEiLCJzbmRfZ2FtZXZvaWNldm9sdW1lIjoiMSIsInNuZF9nYW1ldm9sdW1lIjoiMSIsInNuZF9oZWFkcGhvbmVfZXEiOiIwIiwic25kX21hcG9iamVjdGl2ZV92b2x1bWUkNCI6IjAuMDQiLCJzbmRfbWVudW1hcF92b2x1bWUkNCI6IjEiLCJzbmRfbWVudW11c2ljX3ZvbHVtZSQ0IjoiMC4wNCIsInNuZF9taXhhaGVhZCI6IjAuMDAxIiwic25kX211c2ljdm9sdW1lJDIiOiIxIiwic25kX211dGVfbG9zZWZvY3VzIjoidHJ1ZSIsInNuZF9tdXRlX212cF9tdXNpY19saXZlX3BsYXllcnMiOiJmYWxzZSIsInNuZF9tdnBfdm9sdW1lJDQiOiIwLjE2Iiwic25kX3JvdW5kYWN0aW9uX3ZvbHVtZSQ0IjoiMCIsInNuZF9yb3VuZGVuZF92b2x1bWUkNCI6IjAuMTYiLCJzbmRfcm91bmRzdGFydF92b2x1bWUkNCI6IjAiLCJzbmRfc3BhdGlhbGl6ZV9sZXJwIjoiMCIsInNuZF9zdGVhbWF1ZGlvX2VuYWJsZV9wZXJzcGVjdGl2ZV9jb3JyZWN0aW9uIjoidHJ1ZSIsInNuZF9zdGVhbWF1ZGlvX3NvdXJjZV9wYXRoaW5nX2RlYnVnIjoiZmFsc2UiLCJzbmRfc3VyZl92b2x1bWVfaW5haXIiOiIwLjUiLCJzbmRfc3VyZl92b2x1bWVfbWFwIjoiMC4zIiwic25kX3N1cmZfdm9sdW1lX3NsaWRlIjoiMC41Iiwic25kX3RlbnNlY29uZHdhcm5pbmdfdm9sdW1lJDQiOiIwLjA0Iiwic25kX3Rvb2x2b2x1bWUiOiIxIiwic25kX3ZvaXB2b2x1bWUiOiIxIiwic3BlYWtlcl9jb25maWciOiItMSIsInNwZWNfY2VudGVyY2hhc2VjYW0iOiJmYWxzZSIsInNwZWNfcmVwbGF5X2F1dG9zdGFydCI6InRydWUiLCJzcGVjX3Nob3dfeHJheSI6IjEiLCJzcGVjX3VzZW51bWJlcmtleXNfbm9iaW5kcyI6InRydWUiLCJzdl92b2ljZWVuYWJsZSI6InRydWUiLCJ2aWV3bW9kZWxfcHJlc2V0cG9zIjoiMyIsInZvaWNlX2Fsd2F5c19zYW1wbGVfbWljJDIiOiJmYWxzZSIsInZvaWNlX21vZGVuYWJsZSI6InRydWUiLCJ2b2ljZV90aHJlc2hvbGQkMiI6Ii0xMjAiLCJ2b2x1bWUiOiIwLjI1In0sInZpZGVvIjp7IlZlcnNpb24iOiIxNiIsIlZlbmRvcklEIjoiNDMxOCIsIkRldmljZUlEIjoiNzE3MSIsInNldHRpbmcuY3B1X2xldmVsIjoiMSIsInNldHRpbmcuZ3B1X21lbV9sZXZlbCI6IjMiLCJzZXR0aW5nLmdwdV9sZXZlbCI6IjMiLCJzZXR0aW5nLmtub3duZGV2aWNlIjoiMSIsInNldHRpbmcuZGVmYXVsdHJlcyI6IjE0NDAiLCJzZXR0aW5nLmRlZmF1bHRyZXNoZWlnaHQiOiIxMDgwIiwic2V0dGluZy5yZWZyZXNocmF0ZV9udW1lcmF0b3IiOiIxNDQwMDAiLCJzZXR0aW5nLnJlZnJlc2hyYXRlX2Rlbm9taW5hdG9yIjoiMTAwMCIsInNldHRpbmcuZnVsbHNjcmVlbiI6IjEiLCJzZXR0aW5nLmNvb3BfZnVsbHNjcmVlbiI6IjAiLCJzZXR0aW5nLm5vd2luZG93Ym9yZGVyIjoiMSIsInNldHRpbmcubWF0X3ZzeW5jIjoiMCIsInNldHRpbmcuZnVsbHNjcmVlbl9taW5fb25fZm9jdXNfbG9zcyI6IjEiLCJzZXR0aW5nLmhpZ2hfZHBpIjoiMCIsIkF1dG9jb25maWciOiIyIiwic2V0dGluZy5zaGFkZXJxdWFsaXR5IjoiMCIsInNldHRpbmcucl90ZXh0dXJlZmlsdGVyaW5ncXVhbGl0eSI6IjIiLCJzZXR0aW5nLm1zYWFfc2FtcGxlcyI6IjQiLCJzZXR0aW5nLnJfY3Nnb19jbWFhX2VuYWJsZSI6IjAiLCJzZXR0aW5nLnZpZGVvY2ZnX3NoYWRvd19xdWFsaXR5IjoiMCIsInNldHRpbmcudmlkZW9jZmdfZHluYW1pY19zaGFkb3dzIjoiMCIsInNldHRpbmcudmlkZW9jZmdfdGV4dHVyZV9kZXRhaWwiOiIwIiwic2V0dGluZy52aWRlb2NmZ19wYXJ0aWNsZV9kZXRhaWwiOiIwIiwic2V0dGluZy52aWRlb2NmZ19hb19kZXRhaWwiOiIwIiwic2V0dGluZy52aWRlb2NmZ19oZHJfZGV0YWlsIjoiMyIsInNldHRpbmcudmlkZW9jZmdfZnNyX2RldGFpbCI6IjQiLCJzZXR0aW5nLm1vbml0b3JfaW5kZXgiOiIwIiwic2V0dGluZy5yX2xvd19sYXRlbmN5IjoiMSIsInNldHRpbmcuYXNwZWN0cmF0aW9tb2RlIjoiMCJ9LCJsYXVuY2hPcHRpb25zIjoiK2Zwc19tYXggMCAtZm9yY2Vub3ZzeW5jIC1ub2pveSAtbm92aWQgK2VuZ2luZV9sb3dfbGF0ZW5jeV9zbGVlcF9hZnRlcl9jbGllbnRfdGljayB0cnVlIC1sYW5ndWFnZSBlbmdsaXNoIC13IDE0NDAgLWggMTA4MCAtZnVsbHNjcmVlbiArZXhlYyBhdXRvZXhlYyJ9LHsiaWQiOiI3NGY3YzU4MzAyNDA0NTU5OGRkZjYzN2MxMTNmYmUzNSIsIm5hbWUiOiLQmtC70YPQsdC90YvQuSIsInVwZGF0ZWRBdCI6IjIwMjYtMTAtMTBUMTQ6Mzc6NTIuMTQyMzU0NFoiLCJnYW1lRmlsZXMiOnsiYXV0b2V4ZWMuY2ZnIjoiLy8gQ1MyIHJ1bnMgdGhpcyBmaWxlIGF1dG9tYXRpY2FsbHkgb24gc3RhcnR1cC5cclxuLy8gSXQgc3RheXMgdGlueSBvbiBwdXJwb3NlIC0gaXQganVzdCBjaGFpbnMgdG8gdGhlIHJlYWwgY29uZmlnLFxyXG4vLyBzbyB0aGVyZSBpcyBvbmx5IG9uZSBwbGFjZSB0byBlZGl0LlxyXG5cclxuZXhlYyBvY2VhbnZpZXZ2XHJcblxyXG4vLyBGb3JjZSB0aGUgc2V0dGluZ3MgYWJvdmUgdG8gYmUgd3JpdHRlbiB0byBkaXNrIHNvIHRoZXkgc3Vydml2ZVxyXG4vLyB0aGUgbmV4dCB0aW1lIENTMiBzYXZlcyBpdHMgb3duIGNvbmZpZy5cclxuaG9zdF93cml0ZWNvbmZpZ1xyXG5cclxuLy8gLS0tLSBhZGRlZCBieSBjczItY29uZmlnIC0tLS1cclxuZXhlYyBjcm9zc2hhaXJcclxuaG9zdF93cml0ZWNvbmZpZ1xyXG4iLCJjcm9zc2hhaXIuY2ZnIjoiLy8gTWlncmF0ZWQgZnJvbSB0aGUgc2F2ZWQgcHJlLVNlcHRlbWJlci0yMDI2IGNyb3NzaGFpciBhdCAxNDQweDEwODAuXHJcbi8vIFBpeGVsIGRpbWVuc2lvbnMgYXJlIGEgY2FsY3VsYXRlZCBtYXRjaDsgY2hlY2sgdGhlIGFwcGVhcmFuY2UgaW4gQ1MyLlxyXG4vLyBDb2xvciBwcmVzZXQgNCB3YXMgY3lhbjsgdGhlIG9sZCBjdXN0b20gUkdCIHZhbHVlcyB3ZXJlIG5vdCBhY3RpdmUuXHJcblxyXG5jbF9jcm9zc2hhaXJzdHlsZSBcIjRcIlxyXG5jbF9jcm9zc2hhaXJfbGVuZ3RoIFwiNFwiXHJcbmNsX2Nyb3NzaGFpcl90aGlja25lc3MgXCIxXCJcclxuY2xfY3Jvc3NoYWlyX2dhcCBcIjJcIlxyXG5jbF9jcm9zc2hhaXJfZHJhd291dGxpbmUgXCIyXCJcclxuY2xfY3Jvc3NoYWlyb3V0bGluZV9yIFwiMFwiXHJcbmNsX2Nyb3NzaGFpcm91dGxpbmVfZyBcIjBcIlxyXG5jbF9jcm9zc2hhaXJvdXRsaW5lX2IgXCIwXCJcclxuY2xfY3Jvc3NoYWlyb3V0bGluZV9hIFwiMjU1XCJcclxuY2xfY3Jvc3NoYWlyX2R5bmFtaWNfbWF4ZGlzdF9zcGxpdHJhdGlvIFwiMC4zXCJcclxuY2xfY3Jvc3NoYWlyX2R5bmFtaWNfc3BsaXRhbHBoYV9pbm5lcm1vZCBcIjFcIlxyXG5jbF9jcm9zc2hhaXJfZHluYW1pY19zcGxpdGFscGhhX291dGVybW9kIFwiMC41XCJcclxuY2xfY3Jvc3NoYWlyX2R5bmFtaWNfc3BsaXRkaXN0IFwiN1wiXHJcbmNsX2Nyb3NzaGFpcl9yZWNvaWwgXCJmYWxzZVwiXHJcbmNsX2Nyb3NzaGFpcl9zbmlwZXJfd2lkdGggXCIxXCJcclxuY2xfY3Jvc3NoYWlyX3QgXCJmYWxzZVwiXHJcbmNsX2Nyb3NzaGFpcmNvbG9yX2EgXCIyNTVcIlxyXG5jbF9jcm9zc2hhaXJjb2xvcl9iIFwiMjUwXCJcclxuY2xfY3Jvc3NoYWlyY29sb3JfZyBcIjI1MFwiXHJcbmNsX2Nyb3NzaGFpcmNvbG9yX3IgXCI1MFwiXHJcbmNsX2Nyb3NzaGFpcmRvdCBcImZhbHNlXCJcclxuLy8gU2V0IGFmdGVyIHRoZSBzaXplIGNvbW1hbmRzOiBlZGl0aW5nIHNpemUgdXBkYXRlcyB0aGUgcmVmZXJlbmNlIGhlaWdodC5cclxuY2xfY3Jvc3NoYWlyX3NjcmVlbl9oZWlnaHQgXCIxMDgwXCJcclxuIiwia25pZmUuY2ZnIjoibXBfZHJvcF9rbmlmZV9lbmFibGUgdHJ1ZVxyXG5zdWJjbGFzc19jcmVhdGUgNTA4XHJcblxyXG5lY2hvIEtuaWZlIGRyb3BwZWRcclxuIiwib2NlYW52aWV2di5jZmciOiJiaW5kIFwibXdoZWVsdXBcIiBcInN3aXRjaGhhbmRzXCJcclxuYmluZCBcIm13aGVlbGRvd25cIiBcIitqdW1wXCJcclxuXHJcbmJpbmQgXCJzY2FuY29kZTg2XCIgXCJ2b2x1bWUgMC4wMVwiXHJcbmJpbmQgXCJzY2FuY29kZTg3XCIgXCJ2b2x1bWUgMC4yNVwiXHJcblxyXG5iaW5kIFwic2NhbmNvZGU4OVwiIFwiYnV5IHZlc3RoZWxtOyBidXkgdmVzdFwiXHJcbmJpbmQgXCJzY2FuY29kZTkwXCIgXCJidXkgYWs0NzsgYnV5IG00YTFfc2lsZW5jZXJcIlxyXG5iaW5kIFwic2NhbmNvZGU5MVwiIFwiYnV5IGRlZnVzZXJcIlxyXG5iaW5kIFwic2NhbmNvZGU5MlwiIFwiYnV5IGF3cFwiXHJcbmJpbmQgXCJzY2FuY29kZTkzXCIgXCJidXkgZGVhZ2xlXCJcclxuYmluZCBcInNjYW5jb2RlOTRcIiBcImJ1eSBtb2xvdG92OyBidXkgaW5jZ3JlbmFkZVwiXHJcbmJpbmQgXCJzY2FuY29kZTk1XCIgXCJidXkgc21va2VncmVuYWRlXCJcclxuYmluZCBcInNjYW5jb2RlOTZcIiBcImJ1eSBmbGFzaGJhbmdcIlxyXG5iaW5kIFwic2NhbmNvZGU5N1wiIFwiYnV5IGhlZ3JlbmFkZVwiXHJcblxyXG5iaW5kIFwibW91c2U0XCIgXCJzbG90N1wiXHJcbmJpbmQgXCJtb3VzZTVcIiBcInNsb3Q4XCJcclxuXHJcbmJpbmQgXCJzY2FuY29kZTY1XCIgXCJleGVjIHRyYWluaW5nXCJcclxuYmluZCBcInNjYW5jb2RlNjZcIiBcImV4ZWMga25pZmVcIlxyXG5cclxudm9sdW1lIFwiMC4xXCJcclxuYmluZCBcInNjYW5jb2RlMjI2XCIgXCIrdm9pY2VyZWNvcmRcIlxyXG5cclxuYmluZCBcInpcIiBcInJhZGlvMVwiXHJcbmJpbmQgXCJ4XCIgXCJyYWRpbzJcIlxyXG5iaW5kIFwiY1wiIFwicmFkaW8zXCJcclxuXHJcbnNlbnNpdGl2aXR5IFwiMi4yXCJcclxuem9vbV9zZW5zaXRpdml0eV9yYXRpbyBcIjEuMFwiXHJcblxyXG52aWV3bW9kZWxfZm92IDY4OyBcclxudmlld21vZGVsX29mZnNldF94IDIuNVxyXG52aWV3bW9kZWxfb2Zmc2V0X3kgMFxyXG52aWV3bW9kZWxfb2Zmc2V0X3ogLTEuNVxyXG52aWV3bW9kZWxfcHJlc2V0cG9zIDNcclxuXHJcbmVjaG8gQ29uZmlnIGxvYWRlZFxyXG4iLCJ0cmFpbmluZy5jZmciOiIvLyBHZW5lcmFsXHJcbmJvdF9raWNrXHJcbm1wX3dhcm11cF9lbmRcclxuc3ZfY2hlYXRzIHRydWVcclxubXBfbGltaXR0ZWFtcyAwXHJcbm1wX2F1dG90ZWFtYmFsYW5jZSAwXHJcblxyXG4vLyBFY29ub215XHJcbm1wX21heG1vbmV5IDYwMDAwXHJcbm1wX3N0YXJ0bW9uZXkgNjAwMDBcclxubXBfYnV5dGltZSA5OTk5XHJcbm1wX2J1eV9hbnl3aGVyZSAxXHJcblxyXG4vLyBSb3VuZCBzZXR0aW5nc1xyXG5tcF9mcmVlemV0aW1lIDBcclxubXBfcm91bmR0aW1lIDYwXHJcbm1wX3JvdW5kdGltZV9kZWZ1c2UgNjBcclxubXBfcmVzdGFydGdhbWUgMVxyXG5cclxuLy8gUmVzcGF3blxyXG5tcF9yZXNwYXduX29uX2RlYXRoX2N0IDFcclxubXBfcmVzcGF3bl9vbl9kZWF0aF90IDFcclxuXHJcbi8vIFByYWN0aWNlIC8gdmlzdWFsc1xyXG5zdl9pbmZpbml0ZV9hbW1vIDFcclxuc3Zfc2hvd2ltcGFjdHMgMVxyXG5zdl9zaG93aW1wYWN0c190aW1lIDEwXHJcbmFtbW9fZ3JlbmFkZV9saW1pdF90b3RhbCA1XHJcbnN2X2dyZW5hZGVfdHJhamVjdG9yeV9wcmFjX3BpcHJldmlldyAxXHJcblxyXG4vLyBCaW5kc1xyXG5iaW5kIGFsdCBcIm5vY2xpcFwiXHJcbmJpbmQgXCJDQVBTTE9DS1wiIFwic3ZfcmV0aHJvd19sYXN0X2dyZW5hZGVcIlxyXG5iaW5kIFwiTU9VU0UzXCIgXCJlbnRfZmlyZSBzbW9rZWdyZW5hZGVfcHJvamVjdGlsZSBraWxsOyBlbnRfZmlyZSBtb2xvdG92X3Byb2plY3RpbGUga2lsbDsgZW50X2ZpcmUgZmxhc2hiYW5nX3Byb2plY3RpbGUga2lsbDsgZW50X2ZpcmUgaGVncmVuYWRlX3Byb2plY3RpbGUga2lsbDsgZW50X2ZpcmUgZGVjb3lfcHJvamVjdGlsZSBraWxsOyBlbnRfZmlyZSBpbmZlcm5vIGtpbGw7IHN0b3Bzb3VuZFwiXHJcblxyXG5lY2hvIFRyYWluaW5nIG1vZGUgYWN0aXZhdGVkXHJcbiJ9LCJ1c2VyIjp7ImNsX2J1eW1lbnVfY3RfbmV4dHJvdW5kX2hpZ2giOiI1MDAwIiwiY2xfYnV5bWVudV9jdF9uZXh0cm91bmRfbG93IjoiMTQwMCIsImNsX2J1eW1lbnVfdF9uZXh0cm91bmRfaGlnaCI6IjUwMDAiLCJjbF9idXltZW51X3RfbmV4dHJvdW5kX2xvdyI6IjE0MDAiLCJjbF9idXl3aGVlbF9kb25hdGVfa2V5IjoiMCIsImNsX2J1eXdoZWVsX25vbnVtYmVycHVyY2hhc2luZyI6ImZhbHNlIiwiY2xfZGVib3VuY2Vfem9vbSI6InRydWUiLCJjbF9ncmVuYWRlY3Jvc3NoYWlyX2RlY295IjoidHJ1ZSIsImNsX2dyZW5hZGVjcm9zc2hhaXJfZXhwbG9zaXZlIjoidHJ1ZSIsImNsX2dyZW5hZGVjcm9zc2hhaXJfZmlyZSI6InRydWUiLCJjbF9ncmVuYWRlY3Jvc3NoYWlyX2ZsYXNoIjoidHJ1ZSIsImNsX2dyZW5hZGVjcm9zc2hhaXJfa2VlcHVzZXJjcm9zc2hhaXIiOiJ0cnVlIiwiY2xfZ3JlbmFkZWNyb3NzaGFpcl9zbW9rZSI6InRydWUiLCJjbF9ncmVuYWRlY3Jvc3NoYWlyZGVsYXlfZGVjb3kiOiIyIiwiY2xfZ3JlbmFkZWNyb3NzaGFpcmRlbGF5X2V4cGxvc2l2ZSI6IjIiLCJjbF9ncmVuYWRlY3Jvc3NoYWlyZGVsYXlfZmlyZSI6IjIiLCJjbF9ncmVuYWRlY3Jvc3NoYWlyZGVsYXlfZmxhc2giOiIyIiwiY2xfZ3JlbmFkZWNyb3NzaGFpcmRlbGF5X3Ntb2tlIjoiMiIsImNsX2ludmVudG9yeV9yYWRpYWxfaW1tZWRpYXRlX3NlbGVjdCI6InRydWUiLCJjbF9pbnZlbnRvcnlfcmFkaWFsX3RhcF90b19jeWNsZSI6InRydWUiLCJjbF9pcm9uc2lnaHRfZG90X3NjYWxlIjoiMSIsImNsX2lyb25zaWdodF91c2Vjcm9zc2hhaXJjb2xvciI6ImZhbHNlIiwiY2xfcHJlZmVyX2xlZnRoYW5kZWQiOiJmYWxzZSIsImNsX3Nob3dsb2Fkb3V0IjoidHJ1ZSIsImNsX3NpbGVuY2VyX21vZGUiOiIwIiwiY2xfc25pcGVyX2F1dG9fcmV6b29tIjoidHJ1ZSIsImNsX3VzZV9vcGVuc19idXlfbWVudSI6ImZhbHNlIiwiY29uX2VuYWJsZSI6InRydWUiLCJjcm9zc2hhaXIiOiJ0cnVlIiwiaHVkX3Nob3d0YXJnZXRpZCI6InRydWUiLCJpbnB1dF9idXR0b25fY29kZV9pc19zY2FuX2NvZGVfc2NkIjoidHJ1ZSIsImpveV9heGlzcl9kZWFkem9uZSI6IjAuMTUiLCJqb3lfYXhpc3JfcmVsYXRpdmUiOiJmYWxzZSIsImpveV9heGlzdV9kZWFkem9uZSI6IjAuMTUiLCJqb3lfYXhpc3VfcmVsYXRpdmUiOiJmYWxzZSIsImpveV9heGlzdl9kZWFkem9uZSI6IjAuMTUiLCJqb3lfYXhpc3ZfcmVsYXRpdmUiOiJmYWxzZSIsImpveV9heGlzeF9kZWFkem9uZSI6IjAuMTUiLCJqb3lfYXhpc3hfcmVsYXRpdmUiOiJmYWxzZSIsImpveV9heGlzeV9kZWFkem9uZSI6IjAuMTUiLCJqb3lfYXhpc3lfcmVsYXRpdmUiOiJmYWxzZSIsImpveV9heGlzel9kZWFkem9uZSI6IjAuMTUiLCJqb3lfYXhpc3pfcmVsYXRpdmUiOiJmYWxzZSIsImpveV9jaXJjbGVfY29ycmVjdF9tb2RlIjoiMSIsImpveV9jaXJjbGVfY29ycmVjdF9tb2RlX3ZlaGljbGUiOiIyIiwiam95X2ZvcndhcmRfc2Vuc2l0aXZpdHkiOiIxIiwiam95X21vdmVtZW50X3N0aWNrIjoiZmFsc2UiLCJqb3lfcGl0Y2hfc2Vuc2l0aXZpdHkiOiIzIiwiam95X3BpdGNoc2Vuc2l0aXZpdHkiOiIxIiwiam95X3Jlc3BvbnNlX2xvb2siOiIwIiwiam95X3Jlc3BvbnNlX21vdmUiOiI5Iiwiam95X3NpZGVfc2Vuc2l0aXZpdHkiOiIxIiwiam95X3lhd19zZW5zaXRpdml0eSI6IjMiLCJqb3lfeWF3c2Vuc2l0aXZpdHkiOiItMSIsIm1fcGl0Y2giOiIwLjAyMiIsIm1feWF3IjoiMC4wMjIiLCJvcHRpb25fZHVja19tZXRob2QiOiJmYWxzZSIsIm9wdGlvbl9zcGVlZF9tZXRob2QiOiJmYWxzZSIsInBsYXllcl9uZXZlcnNob3dfY29tbXVuaXR5c2VydmVybWVzc2FnZSI6IjEiLCJzZW5zaXRpdml0eSI6IjIuMiIsInNlbnNpdGl2aXR5X3lfc2NhbGUiOiIxIiwidmlld21vZGVsX2ZvdiI6IjY4Iiwidmlld21vZGVsX29mZnNldF94IjoiMi41Iiwidmlld21vZGVsX29mZnNldF95IjoiMCIsInZpZXdtb2RlbF9vZmZzZXRfeiI6Ii0xLjUiLCJ2b2ljZV92b3giOiIwIiwiem9vbV9zZW5zaXRpdml0eV9yYXRpbyI6IjEiLCJjbF9jcm9zc2hhaXJzdHlsZSI6IjQiLCJjbF9jcm9zc2hhaXJfbGVuZ3RoIjoiNCIsImNsX2Nyb3NzaGFpcl90aGlja25lc3MiOiIxIiwiY2xfY3Jvc3NoYWlyX2dhcCI6IjIiLCJjbF9jcm9zc2hhaXJfZHJhd291dGxpbmUiOiIyIiwiY2xfY3Jvc3NoYWlyb3V0bGluZV9yIjoiMCIsImNsX2Nyb3NzaGFpcm91dGxpbmVfZyI6IjAiLCJjbF9jcm9zc2hhaXJvdXRsaW5lX2IiOiIwIiwiY2xfY3Jvc3NoYWlyb3V0bGluZV9hIjoiMjU1IiwiY2xfY3Jvc3NoYWlyX2R5bmFtaWNfbWF4ZGlzdF9zcGxpdHJhdGlvIjoiMC4zIiwiY2xfY3Jvc3NoYWlyX2R5bmFtaWNfc3BsaXRhbHBoYV9pbm5lcm1vZCI6IjEiLCJjbF9jcm9zc2hhaXJfZHluYW1pY19zcGxpdGFscGhhX291dGVybW9kIjoiMC41IiwiY2xfY3Jvc3NoYWlyX2R5bmFtaWNfc3BsaXRkaXN0IjoiNyIsImNsX2Nyb3NzaGFpcl9yZWNvaWwiOiJmYWxzZSIsImNsX2Nyb3NzaGFpcl9zbmlwZXJfd2lkdGgiOiIxIiwiY2xfY3Jvc3NoYWlyX3QiOiJmYWxzZSIsImNsX2Nyb3NzaGFpcmNvbG9yX2EiOiIyNTUiLCJjbF9jcm9zc2hhaXJjb2xvcl9iIjoiMjUwIiwiY2xfY3Jvc3NoYWlyY29sb3JfZyI6IjI1MCIsImNsX2Nyb3NzaGFpcmNvbG9yX3IiOiI1MCIsImNsX2Nyb3NzaGFpcmRvdCI6ImZhbHNlIiwiY2xfY3Jvc3NoYWlyX3NjcmVlbl9oZWlnaHQiOiIxMDgwIn0sImtleXMiOnsidiI6Ijx1bmJvdW5kPiIsIktQXzEiOiJidXkgdmVzdGhlbG07IGJ1eSB2ZXN0IiwiS1BfMiI6ImJ1eSBhazQ3OyBidXkgbTRhMV9zaWxlbmNlciIsIktQXzMiOiJidXkgZGVmdXNlciIsIktQXzQiOiJidXkgYXdwIiwiS1BfNSI6ImJ1eSBkZWFnbGUiLCJLUF82IjoiYnV5IG1vbG90b3Y7IGJ1eSBpbmNncmVuYWRlIiwiS1BfNyI6ImJ1eSBzbW9rZWdyZW5hZGUiLCJLUF84IjoiYnV5IGZsYXNoYmFuZyIsIktQXzkiOiJidXkgaGVncmVuYWRlIiwiS1BfTUlOVVMiOiJ2b2x1bWUgMC4wMSIsIktQX1BMVVMiOiJ2b2x1bWUgMC4yNSIsIkFMVCI6Iit2b2ljZXJlY29yZCIsIkY3IjoiZXhlYyBvY2VhbnZpZXZ2IiwiRjgiOiJleGVjIHRyYWluaW5nIiwiRjkiOiJleGVjIGtuaWZlIiwiTU9VU0U0Ijoic2xvdDciLCJNT1VTRTUiOiJzbG90OCIsIk1XSEVFTFVQIjoic3dpdGNoaGFuZHMiLCJNV0hFRUxET1dOIjoiK2p1bXAiLCJjIjoicmFkaW8zIiwieCI6InJhZGlvMiIsImAiOiJ0b2dnbGVjb25zb2xlIiwiRU5URVIiOiJlbnRfZmlyZV9vdXRwdXQgc2NyaXB0IE9uVXNlcjEgS2V5SW5wdXQsRW50ZXIiLCJCQUNLU1BBQ0UiOiJlbnRfZmlyZV9vdXRwdXQgc2NyaXB0IE9uVXNlcjEgS2V5SW5wdXQsQmFja3NwYWNlIiwiREVMIjoibXV0ZSIsIk1PVVNFMyI6ImVudF9maXJlIHNtb2tlZ3JlbmFkZV9wcm9qZWN0aWxlIGtpbGw7IGVudF9maXJlIG1vbG90b3ZfcHJvamVjdGlsZSBraWxsOyBlbnRfZmlyZSBmbGFzaGJhbmdfcHJvamVjdGlsZSBraWxsOyBlbnRfZmlyZSBoZWdyZW5hZGVfcHJvamVjdGlsZSBraWxsOyBlbnRfZmlyZSBkZWNveV9wcm9qZWN0aWxlIGtpbGw7IGVudF9maXJlIGluZmVybm8ga2lsbDsgc3RvcHNvdW5kIiwieiI6InJhZGlvMSIsImkiOiJkZW1vX3RvZ2dsZXBhdXNlIiwiaiI6ImRlbW9fZ290byAtMzIwIHJlbGF0aXZlIiwibyI6InRvZ2dsZSBzcGVjX3Nob3dfeHJheSIsIktQX01VTFRJUExZIjoiZGVtb190aW1lc2NhbGUgMC4yNSIsIk1PVVNFMSI6IithdHRhY2siLCJUQUIiOiIrc2hvd3Njb3JlcyIsIjAiOiJzbG90MTAiLCIxIjoic2xvdDEiLCIyIjoic2xvdDIiLCIzIjoic2xvdDMiLCI0Ijoic2xvdDQiLCI1Ijoic2xvdDUiLCI2Ijoic2xvdDYiLCI3Ijoic2xvdDciLCI4Ijoic2xvdDgiLCI5Ijoic2xvdDkiLCJhIjoiK2xlZnQiLCJiIjoiYnV5bWVudSIsImQiOiIrcmlnaHQiLCJlIjoiK3VzZSIsImYiOiIrbG9va2F0d2VhcG9uIiwiZyI6ImRyb3AiLCJsIjoibGVmdGhhbmQxIiwibSI6InRlYW1tZW51IiwibiI6Im5vY2xpcCIsInEiOiJsYXN0aW52IiwiciI6IityZWxvYWQiLCJzIjoiK2JhY2siLCJ1IjoibWVzc2FnZW1vZGUyIiwidyI6Iitmb3J3YXJkIiwieSI6Im1lc3NhZ2Vtb2RlIiwiWyI6ImRlbW9fdGltZXNjYWxlIDEiLCJdIjoiZGVtb190aW1lc2NhbGUgMTAiLCIvIjoiZW50X2ZpcmUgc21va2VncmVuYWRlX3Byb2plY3RpbGUga2lsbCIsIlNQQUNFIjoiK2p1bXAiLCJFU0NBUEUiOiJjYW5jZWxzZWxlY3QiLCJQQVVTRSI6InBhdXNlIiwiU0hJRlQiOiIrc3ByaW50IiwiQ1RSTCI6IitkdWNrIiwiVVBBUlJPVyI6ImRlbW9fcGF1c2UiLCJET1dOQVJST1ciOiJkZW1vX3Jlc3VtZSIsIkYyIjoicmVidXkiLCJNT1VTRTIiOiIrYXR0YWNrMiIsIkNBUFNMT0NLIjoic3ZfcmV0aHJvd19sYXN0X2dyZW5hZGUifSwibWFjaGluZSI6eyJjbF9hbGxvd19hbmltYXRlZF9hdmF0YXJzIjoidHJ1ZSIsImNsX2F1dG9oZWxwIjoidHJ1ZSIsImNsX2NvbG9yIjoiMyIsImNsX2Nyb3NzaGFpcl9mcmllbmRseV93YXJuaW5nIjoiMCIsImNsX2RlYXRoY2FtcGFuZWxfcG9zaXRpb25fZHluYW1pYyI6IjEiLCJjbF9kaXNhYmxlX3JvdW5kX2VuZF9yZXBvcnQiOiJmYWxzZSIsImNsX2RtX2J1eXJhbmRvbXdlYXBvbnMiOiJ0cnVlIiwiY2xfZW5hYmxlX3BhcnR5X3ZvaWNlIjoidHJ1ZSIsImNsX2ZvcmNlX3NwZWNfaHVkX2NvbG9yX3RvX3RlYW0kMSI6InRydWUiLCJjbF9oaWRlX2F2YXRhcl9pbWFnZXMiOiIwIiwiY2xfaHVkX2NvbG9yIjoiMCIsImNsX2h1ZF9yYWRhcl9iYWNrZ3JvdW5kX2FscGhhIjoiMC42MjciLCJjbF9odWRfcmFkYXJfYmx1cl9iYWNrZ3JvdW5kIjoidHJ1ZSIsImNsX2h1ZF9yYWRhcl9tYXBfYWRkaXRpdmUiOiJ0cnVlIiwiY2xfaHVkX3JhZGFyX3NjYWxlIjoiMC45MDM3MjYiLCJjbF9odWRfdGVsZW1ldHJ5X2ZyYW1ldGltZV9wb29yIjoiMTAwIiwiY2xfaHVkX3RlbGVtZXRyeV9mcmFtZXRpbWVfc2hvdyI6IjEiLCJjbF9odWRfdGVsZW1ldHJ5X25ldF9kZXRhaWxlZCI6IjAiLCJjbF9odWRfdGVsZW1ldHJ5X25ldF9taXNkZWxpdmVyeV9wb29yIjoiNSIsImNsX2h1ZF90ZWxlbWV0cnlfbmV0X21pc2RlbGl2ZXJ5X3Nob3ciOiIxIiwiY2xfaHVkX3RlbGVtZXRyeV9uZXRfcXVhbGl0eV9ncmFwaF9zaG93IjoiMCIsImNsX2h1ZF90ZWxlbWV0cnlfcGluZ19wb29yIjoiMTAwIiwiY2xfaHVkX3RlbGVtZXRyeV9waW5nX3Nob3ciOiIxIiwiY2xfaHVkX3RlbGVtZXRyeV9zZXJ2ZXJyZWN2bWFyZ2luX2dyYXBoX3Nob3ciOiIwIiwiY2xfbXV0ZV9hbGxfYnV0X2ZyaWVuZHNfYW5kX3BhcnR5IjoiMCIsImNsX211dGVfZW5lbXlfdGVhbSI6ImZhbHNlIiwiY2xfbmV0X2J1ZmZlcl90aWNrcyI6IjAiLCJjbF9vYnNlcnZlZF9ib3RfY3Jvc3NoYWlyIjoiMiIsImNsX3BpbmdfZmFkZV9kZWFkem9uZSI6IjYwIiwiY2xfcGluZ19mYWRlX2Rpc3RhbmNlIjoiMzAwIiwiY2xfcGxheWVyX3BpbmdfbXV0ZSI6IjAiLCJjbF9wcmVkaWN0X2JvZHlfc2hvdF9meCI6ImZhbHNlIiwiY2xfcHJlZGljdF9oZWFkX3Nob3RfZngiOiJmYWxzZSIsImNsX3ByZWRpY3Rfa2lsbF9yYWdkb2xscyI6ImZhbHNlIiwiY2xfcXVpY2tpbnZlbnRvcnlfZmlsZW5hbWUiOiJyYWRpYWxfcXVpY2tpbnZlbnRvcnkudHh0IiwiY2xfcXVpY2tpbnZlbnRvcnlfbGFzdGludiI6InRydWUiLCJjbF9xdWlja2ludmVudG9yeV9saW5lX3VwZGF0ZV9zcGVlZCI6IjY1IiwiY2xfcmFkYXJfYWx3YXlzX2NlbnRlcmVkIjoidHJ1ZSIsImNsX3JhZGFyX2ljb25fc2NhbGVfbWluIjoiMC42IiwiY2xfcmFkYXJfcm90YXRlIjoidHJ1ZSIsImNsX3JhZGFyX3NjYWxlIjoiMC45NjA2MTUiLCJjbF9yYWRhcl9zY2FsZV9hbHRlcm5hdGUkMiI6IjAuOTYzMzA3IiwiY2xfcmFkYXJfc2NhbGVfZHluYW1pYyI6ImZhbHNlIiwiY2xfcmFkYXJfc2hvd19hbGxfcGxheWVyc193aGVuX3NwZWN0YXRpbmciOiJ0cnVlIiwiY2xfcmFkYXJfc3F1YXJlX2Fsd2F5cyI6InRydWUiLCJjbF9yYWRhcl9zcXVhcmVfd2hlbl9zcGVjdGF0aW5nIjoidHJ1ZSIsImNsX3JhZGFyX3NxdWFyZV93aXRoX3Njb3JlYm9hcmQiOiJmYWxzZSIsImNsX3JhZGlhbF9yYWRpb190YWJfMF90ZXh0XzEiOiIjQ2hhdHdoZWVsX3JlcXVlc3RzcGVuZCIsImNsX3JhZGlhbF9yYWRpb190YWJfMF90ZXh0XzIiOiIjQ2hhdHdoZWVsX3JlcXVlc3R3ZWFwb24iLCJjbF9yYWRpYWxfcmFkaW9fdGFiXzBfdGV4dF8zIjoiI0NoYXR3aGVlbF9icGxhbiIsImNsX3JhZGlhbF9yYWRpb190YWJfMF90ZXh0XzQiOiIjQ2hhdHdoZWVsX2ZvbGxvd2luZ3lvdSIsImNsX3JhZGlhbF9yYWRpb190YWJfMF90ZXh0XzUiOiIjQ2hhdHdoZWVsX21pZHBsYW4iLCJjbF9yYWRpYWxfcmFkaW9fdGFiXzBfdGV4dF82IjoiI0NoYXR3aGVlbF9mb2xsb3dtZSIsImNsX3JhZGlhbF9yYWRpb190YWJfMF90ZXh0XzciOiIjQ2hhdHdoZWVsX2FwbGFuIiwiY2xfcmFkaWFsX3JhZGlvX3RhYl8wX3RleHRfOCI6IiNDaGF0d2hlZWxfcmVxdWVzdGVjb3JvdW5kIiwiY2xfcmFkaWFsX3JhZGlvX3RhYl8xX3RleHRfMSI6IiNDaGF0d2hlZWxfZW5lbXlzcG90dGVkIiwiY2xfcmFkaWFsX3JhZGlvX3RhYl8xX3RleHRfMiI6IiNDaGF0d2hlZWxfbmVlZGJhY2t1cCIsImNsX3JhZGlhbF9yYWRpb190YWJfMV90ZXh0XzMiOiIjQ2hhdHdoZWVsX2JwbGFuIiwiY2xfcmFkaWFsX3JhZGlvX3RhYl8xX3RleHRfNCI6IiNDaGF0d2hlZWxfYm9tYmNhcnJpZXJzcG90dGVkIiwiY2xfcmFkaWFsX3JhZGlvX3RhYl8xX3RleHRfNSI6IiNDaGF0d2hlZWxfbXVsdGlwbGVlbmVtaWVzaGVyZSIsImNsX3JhZGlhbF9yYWRpb190YWJfMV90ZXh0XzYiOiIjQ2hhdHdoZWVsX3NuaXBlcnNwb3R0ZWQiLCJjbF9yYWRpYWxfcmFkaW9fdGFiXzFfdGV4dF83IjoiI0NoYXR3aGVlbF9hcGxhbiIsImNsX3JhZGlhbF9yYWRpb190YWJfMV90ZXh0XzgiOiIjQ2hhdHdoZWVsX2lucG9zaXRpb24iLCJjbF9yYWRpYWxfcmFkaW9fdGFiXzJfdGV4dF8xIjoiI0NoYXR3aGVlbF9hZmZpcm1hdGl2ZSIsImNsX3JhZGlhbF9yYWRpb190YWJfMl90ZXh0XzIiOiIjQ2hhdHdoZWVsX25lZ2F0aXZlIiwiY2xfcmFkaWFsX3JhZGlvX3RhYl8yX3RleHRfMyI6IiNDaGF0d2hlZWxfY29tcGxpbWVudCIsImNsX3JhZGlhbF9yYWRpb190YWJfMl90ZXh0XzQiOiIjQ2hhdHdoZWVsX3RoYW5rcyIsImNsX3JhZGlhbF9yYWRpb190YWJfMl90ZXh0XzUiOiIjQ2hhdHdoZWVsX2NoZWVyIiwiY2xfcmFkaWFsX3JhZGlvX3RhYl8yX3RleHRfNiI6IiNDaGF0d2hlZWxfcGVwdGFsayIsImNsX3JhZGlhbF9yYWRpb190YWJfMl90ZXh0XzciOiIjQ2hhdHdoZWVsX3NvcnJ5IiwiY2xfcmFkaWFsX3JhZGlvX3RhYl8yX3RleHRfOCI6IiNDaGF0d2hlZWxfc2VjdG9yY2xlYXIiLCJjbF9yYWRpYWxfcmFkaW9fdGFwX3RvX3BpbmciOiJ0cnVlIiwiY2xfcmFkaWFsX3JhZGlvX3ZlcnNpb25fcmVzZXQiOiIxMiIsImNsX3Nhbml0aXplX3BsYXllcl9uYW1lcyI6ImZhbHNlIiwiY2xfc2NvcmVib2FyZF9tb3VzZV9lbmFibGVfYmluZGluZyI6IithdHRhY2syIiwiY2xfc2NvcmVib2FyZF9zdXJ2aXZvcnNfYWx3YXlzX29uIjoiZmFsc2UiLCJjbF9zaG93X2NsYW5faW5fZGVhdGhfbm90aWNlIjoidHJ1ZSIsImNsX3Nob3dfb2JzZXJ2ZXJfY3Jvc3NoYWlyIjoiMiIsImNsX3NuaXBlcl9kZWxheV91bnNjb3BlIjoiZmFsc2UiLCJjbF9zbmlwZXJfc2hvd19pbmFjY3VyYWN5IjoidHJ1ZSIsImNsX3RlYW1pZF9vdmVyaGVhZF9jb2xvcnNfc2hvdyQyIjoidHJ1ZSIsImNsX3RlYW1pZF9vdmVyaGVhZF9mYWRlX25lYXJfY3Jvc3NoYWlyIjoiMC41IiwiY2xfdGVhbWlkX292ZXJoZWFkX21vZGUkMiI6IjMiLCJjbF90ZWFtbWF0ZV9jb2xvcnNfc2hvdyI6IjEiLCJjbF90aW1lb3V0IjoiMzAiLCJjbF91c2VfbGFzdF9zZWxlY3RlZF93ZWFwb25fc2xvdF9wb3NpdGlvbiI6ImZhbHNlIiwiY2xfdmVyc3VzX2ludHJvIjoidHJ1ZSIsImNsX3dlYXBvbl9zZWxlY3Rpb25fcmFyaXR5X2NvbG9yIjoiZmFsc2UiLCJjbG9zZWNhcHRpb24iOiJmYWxzZSIsImNzZ29fbWFwX3ByZXZpZXdfc2NhbGUiOiI0LjI3NDgzNiIsImRzcF92b2x1bWUiOiIwLjgiLCJmb3ZfZGVzaXJlZCI6Ijc1IiwiZnBzX21heCI6IjAiLCJmcHNfbWF4X3VpJDIiOiIyMDAiLCJodWRfZmFzdHN3aXRjaCI6IjAiLCJodWRfc2NhbGluZyQzIjoiMSIsIm1hcG92ZXJ2aWV3X2ljb25fc2NhbGUiOiIxIiwibW91c2VfaW52ZXJ0eSI6ImZhbHNlIiwicl9kcmF3dHJhY2Vyc19maXJzdHBlcnNvbiI6InRydWUiLCJyX2Z1bGxzY3JlZW5fZ2FtbWEiOiIyLjIiLCJyX2ljb25faW1hZ2VfY2FjaGVfdG9fZGlzayI6InRydWUiLCJyX3BsYXllcl92aXNpYmlsaXR5X21vZGUiOiIxIiwicl9zaG93X2J1aWxkX2luZm8iOiJ0cnVlIiwicl9zcGVjdGF0b3JfZmxhc2hiYW5nX29wYWNpdHkiOiIwLjYiLCJyYXRlIjoiNzg2NDMyIiwic2FmZXpvbmV4IjoiMSIsInNhZmV6b25leSI6IjEiLCJzbmRfYXV0b2RldGVjdF9sYXRlbmN5IjoidHJ1ZSIsInNuZF9kZWF0aGNhbWVyYV92b2x1bWUkNCI6IjAuMTYiLCJzbmRfZHVja2VyYXR0YWNrdGltZSI6IjAuNSIsInNuZF9kdWNrZXJyZWxlYXNldGltZSI6IjIuNSIsInNuZF9kdWNrZXJ0aHJlc2hvbGQiOiIwLjE1Iiwic25kX2R1Y2t0b3ZvbHVtZSI6IjAuNTUiLCJzbmRfZ2FpbiI6IjEiLCJzbmRfZ2FtZXZvaWNldm9sdW1lIjoiMSIsInNuZF9nYW1ldm9sdW1lIjoiMSIsInNuZF9oZWFkcGhvbmVfZXEiOiIwIiwic25kX21hcG9iamVjdGl2ZV92b2x1bWUkNCI6IjAuMDQiLCJzbmRfbWVudW1hcF92b2x1bWUkNCI6IjEiLCJzbmRfbWVudW11c2ljX3ZvbHVtZSQ0IjoiMC4wNCIsInNuZF9taXhhaGVhZCI6IjAuMDAxIiwic25kX211c2ljdm9sdW1lJDIiOiIxIiwic25kX211dGVfbG9zZWZvY3VzIjoidHJ1ZSIsInNuZF9tdXRlX212cF9tdXNpY19saXZlX3BsYXllcnMiOiJmYWxzZSIsInNuZF9tdnBfdm9sdW1lJDQiOiIwLjE2Iiwic25kX3JvdW5kYWN0aW9uX3ZvbHVtZSQ0IjoiMCIsInNuZF9yb3VuZGVuZF92b2x1bWUkNCI6IjAuMTYiLCJzbmRfcm91bmRzdGFydF92b2x1bWUkNCI6IjAiLCJzbmRfc3BhdGlhbGl6ZV9sZXJwIjoiMCIsInNuZF9zdGVhbWF1ZGlvX2VuYWJsZV9wZXJzcGVjdGl2ZV9jb3JyZWN0aW9uIjoidHJ1ZSIsInNuZF9zdGVhbWF1ZGlvX3NvdXJjZV9wYXRoaW5nX2RlYnVnIjoiZmFsc2UiLCJzbmRfc3VyZl92b2x1bWVfaW5haXIiOiIwLjUiLCJzbmRfc3VyZl92b2x1bWVfbWFwIjoiMC4zIiwic25kX3N1cmZfdm9sdW1lX3NsaWRlIjoiMC41Iiwic25kX3RlbnNlY29uZHdhcm5pbmdfdm9sdW1lJDQiOiIwLjA0Iiwic25kX3Rvb2x2b2x1bWUiOiIxIiwic25kX3ZvaXB2b2x1bWUiOiIxIiwic3BlYWtlcl9jb25maWciOiItMSIsInNwZWNfY2VudGVyY2hhc2VjYW0iOiJmYWxzZSIsInNwZWNfcmVwbGF5X2F1dG9zdGFydCI6InRydWUiLCJzcGVjX3Nob3dfeHJheSI6IjEiLCJzcGVjX3VzZW51bWJlcmtleXNfbm9iaW5kcyI6InRydWUiLCJzdl92b2ljZWVuYWJsZSI6InRydWUiLCJ2aWV3bW9kZWxfcHJlc2V0cG9zIjoiMyIsInZvaWNlX2Fsd2F5c19zYW1wbGVfbWljJDIiOiJmYWxzZSIsInZvaWNlX21vZGVuYWJsZSI6InRydWUiLCJ2b2ljZV90aHJlc2hvbGQkMiI6Ii0xMjAiLCJ2b2x1bWUiOiIwLjI1In0sInZpZGVvIjp7IlZlcnNpb24iOiIxNiIsIlZlbmRvcklEIjoiNDMxOCIsIkRldmljZUlEIjoiNzE3MSIsInNldHRpbmcuY3B1X2xldmVsIjoiMSIsInNldHRpbmcuZ3B1X21lbV9sZXZlbCI6IjMiLCJzZXR0aW5nLmdwdV9sZXZlbCI6IjMiLCJzZXR0aW5nLmtub3duZGV2aWNlIjoiMSIsInNldHRpbmcuZGVmYXVsdHJlcyI6IjE0NDAiLCJzZXR0aW5nLmRlZmF1bHRyZXNoZWlnaHQiOiIxMDgwIiwic2V0dGluZy5yZWZyZXNocmF0ZV9udW1lcmF0b3IiOiI2MDAwMDAiLCJzZXR0aW5nLnJlZnJlc2hyYXRlX2Rlbm9taW5hdG9yIjoiMTAwMCIsInNldHRpbmcuZnVsbHNjcmVlbiI6IjEiLCJzZXR0aW5nLmNvb3BfZnVsbHNjcmVlbiI6IjAiLCJzZXR0aW5nLm5vd2luZG93Ym9yZGVyIjoiMSIsInNldHRpbmcubWF0X3ZzeW5jIjoiMCIsInNldHRpbmcuZnVsbHNjcmVlbl9taW5fb25fZm9jdXNfbG9zcyI6IjEiLCJzZXR0aW5nLmhpZ2hfZHBpIjoiMCIsIkF1dG9jb25maWciOiIyIiwic2V0dGluZy5zaGFkZXJxdWFsaXR5IjoiMCIsInNldHRpbmcucl90ZXh0dXJlZmlsdGVyaW5ncXVhbGl0eSI6IjIiLCJzZXR0aW5nLm1zYWFfc2FtcGxlcyI6IjQiLCJzZXR0aW5nLnJfY3Nnb19jbWFhX2VuYWJsZSI6IjAiLCJzZXR0aW5nLnZpZGVvY2ZnX3NoYWRvd19xdWFsaXR5IjoiMSIsInNldHRpbmcudmlkZW9jZmdfZHluYW1pY19zaGFkb3dzIjoiMCIsInNldHRpbmcudmlkZW9jZmdfdGV4dHVyZV9kZXRhaWwiOiIxIiwic2V0dGluZy52aWRlb2NmZ19wYXJ0aWNsZV9kZXRhaWwiOiIwIiwic2V0dGluZy52aWRlb2NmZ19hb19kZXRhaWwiOiIwIiwic2V0dGluZy52aWRlb2NmZ19oZHJfZGV0YWlsIjoiLTEiLCJzZXR0aW5nLnZpZGVvY2ZnX2Zzcl9kZXRhaWwiOiIwIiwic2V0dGluZy5tb25pdG9yX2luZGV4IjoiMCIsInNldHRpbmcucl9sb3dfbGF0ZW5jeSI6IjEiLCJzZXR0aW5nLmFzcGVjdHJhdGlvbW9kZSI6IjAifSwibGF1bmNoT3B0aW9ucyI6IitmcHNfbWF4IDAgLWZvcmNlbm92c3luYyAtbm9qb3kgLW5vdmlkICtlbmdpbmVfbG93X2xhdGVuY3lfc2xlZXBfYWZ0ZXJfY2xpZW50X3RpY2sgdHJ1ZSAtbGFuZ3VhZ2UgZW5nbGlzaCAtdyAxNDQwIC1oIDEwODAgLWZ1bGxzY3JlZW4gK2V4ZWMgYXV0b2V4ZWMifV0sIm5vdGVzIjpbeyJMZW5ndGgiOjI2M30seyJMZW5ndGgiOjE2Mn1dfQ==' }
-catch { Write-Host ''; Write-Host $_.Exception.Message -ForegroundColor Yellow; Write-Host ''; [void](Read-Host 'Press Enter to close'); exit 1 }
+catch { Stop-TerminalView; Write-Host ''; Write-Host $_.Exception.Message -ForegroundColor Yellow; Write-Host ''; [void](Read-Host 'Press Enter to close'); exit 1 }
+finally { Stop-TerminalView }
